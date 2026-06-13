@@ -1,0 +1,30 @@
+@inherits LayoutComponentBase
+
+<div class="mip-layout">
+    <nav class="mip-sidebar">
+        <div class="mip-logo">
+            <span class="mip-logo-title">miProcurement</span>
+            <span class="mip-logo-sub">K-12 Food Service ERP</span>
+        </div>
+        <ul class="mip-nav">
+            <li><NavLink href="" Match="NavLinkMatch.All" class="mip-nav-link"><span class="mip-icon">⊞</span> Dashboard</NavLink></li>
+            <li><NavLink href="purchase-orders" class="mip-nav-link"><span class="mip-icon">📋</span> Purchase Orders</NavLink></li>
+            <li><NavLink href="inventory" class="mip-nav-link"><span class="mip-icon">📦</span> Inventory</NavLink></li>
+            <li><NavLink href="commodities" class="mip-nav-link"><span class="mip-icon">🌾</span> Commodities</NavLink></li>
+            <li><NavLink href="waste" class="mip-nav-link"><span class="mip-icon">📉</span> Waste Log</NavLink></li>
+            <li class="mip-nav-divider"></li>
+            <li><NavLink href="admin/vendors" class="mip-nav-link"><span class="mip-icon">🏢</span> Vendors</NavLink></li>
+        </ul>
+    </nav>
+    <div class="mip-main">
+        <header class="mip-topbar">
+            <div class="mip-topbar-title">MiChoice</div>
+            <div class="mip-topbar-right">
+                <span class="mip-badge-env">PREVIEW</span>
+            </div>
+        </header>
+        <main class="mip-content">
+            @Body
+        </main>
+    </div>
+</div>

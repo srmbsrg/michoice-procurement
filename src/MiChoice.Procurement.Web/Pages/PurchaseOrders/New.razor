@@ -1,0 +1,147 @@
+@page "/purchase-orders/new"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject NavigationManager Nav
+
+<PageTitle>New Purchase Order — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">New Purchase Order</div>
+        <div class="page-sub">Create a draft PO for vendor fulfillment</div>
+    </div>
+    <a href="/purchase-orders" class="btn btn-secondary">← Back</a>
+</div>
+
+<div class="two-col" style="align-items:start">
+<div>
+<div class="card">
+    <h2>Order Details</h2>
+    <div class="form-group">
+        <label class="form-label">Vendor *</label>
+        <select class="form-control" @bind="model.VendorId">
+            <option value="0">— Select vendor —</option>
+            @foreach (var v in vendors)
+            {
+                <option value="@v.Id">@v.Name</option>
+            }
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Campus *</label>
+        <select class="form-control" @bind="model.CampusId">
+            <option value="0">— Select campus —</option>
+            @foreach (var c in campuses)
+            {
+                <option value="@c.Id">@c.Name</option>
+            }
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Order Date *</label>
+        <input type="date" class="form-control" @bind="orderDateStr" />
+    </div>
+    <div class="form-group">
+        <label class="form-label">Expected Delivery</label>
+        <input type="date" class="form-control" @bind="deliveryDateStr" />
+    </div>
+    <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-control" rows="3" @bind="model.Notes"></textarea>
+    </div>
+</div>
+</div>
+
+<div>
+<div class="card">
+    <h2>Line Items</h2>
+    @foreach (var (line, idx) in lines.Select((l, i) => (l, i)))
+    {
+        <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px;background:#fafafa">
+            <div style="display:grid;grid-template-columns:1fr 80px 80px 90px auto;gap:8px;align-items:end">
+                <div>
+                    <label class="form-label">Description</label>
+                    <input class="form-control" @bind="line.Description" placeholder="Item description" />
+                </div>
+                <div>
+                    <label class="form-label">Qty</label>
+                    <input type="number" class="form-control" @bind="line.QuantityOrdered" min="0" step="0.01" />
+                </div>
+                <div>
+                    <label class="form-label">Unit</label>
+                    <input class="form-control" @bind="line.Unit" placeholder="CS" />
+                </div>
+                <div>
+                    <label class="form-label">Unit Cost</label>
+                    <input type="number" class="form-control" @bind="line.UnitCost" min="0" step="0.01" />
+                </div>
+                <div>
+                    <label class="form-label" style="visibility:hidden">Del</label>
+                    <button class="btn btn-sm btn-danger" @onclick="() => lines.RemoveAt(idx)">✕</button>
+                </div>
+            </div>
+            <div style="text-align:right;font-size:0.82rem;color:#6b7280;margin-top:6px">
+                Line total: $@(line.QuantityOrdered * line.UnitCost).ToString("N2")
+            </div>
+        </div>
+    }
+    <button class="btn btn-secondary btn-sm" @onclick="AddLine">+ Add Line Item</button>
+
+    @if (lines.Any())
+    {
+        <div style="text-align:right;font-weight:700;font-size:1.05rem;margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px">
+            Total: $@lines.Sum(l => l.QuantityOrdered * l.UnitCost).ToString("N2")
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div style="background:#fee2e2;color:#991b1b;border-radius:8px;padding:12px;margin-bottom:12px">@error</div>
+}
+<button class="btn btn-primary" @onclick="SaveDraft" disabled="@saving" style="width:100%;justify-content:center">
+    @(saving ? "Saving…" : "Save as Draft")
+</button>
+</div>
+</div>
+
+@code {
+    private List<MiChoice.Procurement.Domain.Entities.Vendor> vendors = new();
+    private List<MiChoice.Procurement.Domain.Entities.Campus> campuses = new();
+    private PurchaseOrder model = new() { OrderDate = DateOnly.FromDateTime(DateTime.Today) };
+    private List<PurchaseOrderLine> lines = new();
+    private string orderDateStr = DateTime.Today.ToString("yyyy-MM-dd");
+    private string deliveryDateStr = "";
+    private string error = "";
+    private bool saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        vendors = await Db.Vendors.Where(v => v.IsActive).OrderBy(v => v.Name).ToListAsync();
+        campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+        AddLine();
+    }
+
+    private void AddLine() => lines.Add(new PurchaseOrderLine { Unit = "CS", QuantityOrdered = 1 });
+
+    private async Task SaveDraft()
+    {
+        error = "";
+        if (model.VendorId == 0) { error = "Please select a vendor."; return; }
+        if (model.CampusId == 0) { error = "Please select a campus."; return; }
+        if (!lines.Any(l => !string.IsNullOrWhiteSpace(l.Description))) { error = "Add at least one line item."; return; }
+
+        saving = true;
+        model.OrderDate = DateOnly.TryParse(orderDateStr, out var od) ? od : DateOnly.FromDateTime(DateTime.Today);
+        model.ExpectedDelivery = DateOnly.TryParse(deliveryDateStr, out var dd) ? dd : null;
+        model.Status = PurchaseOrderStatus.Draft;
+        model.Lines = lines.Where(l => !string.IsNullOrWhiteSpace(l.Description)).ToList();
+
+        Db.PurchaseOrders.Add(model);
+        await Db.SaveChangesAsync();
+        Nav.NavigateTo($"/purchase-orders/{model.Id}");
+    }
+}

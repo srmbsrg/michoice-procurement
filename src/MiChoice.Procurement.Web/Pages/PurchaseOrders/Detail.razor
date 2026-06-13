@@ -1,0 +1,174 @@
+@page "/purchase-orders/{Id:int}"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject NavigationManager Nav
+
+<PageTitle>PO-@Id.ToString("D4") — miProcurement</PageTitle>
+
+@if (po == null)
+{
+    <p>Loading…</p>
+}
+else
+{
+<div class="page-header">
+    <div>
+        <div class="page-title">PO-@po.Id.ToString("D4")</div>
+        <div class="page-sub">@po.Vendor?.Name · @po.Campus?.Name</div>
+    </div>
+    <div style="display:flex;gap:10px">
+        @if (po.Status == PurchaseOrderStatus.Draft)
+        {
+            <button class="btn btn-secondary" @onclick="SubmitPO">Submit PO</button>
+        }
+        @if (po.Status == PurchaseOrderStatus.Submitted)
+        {
+            <button class="btn btn-primary" @onclick="ReceivePO">Receive All</button>
+        }
+        <a href="/purchase-orders" class="btn btn-secondary">← Back</a>
+    </div>
+</div>
+
+<div class="two-col" style="align-items:start">
+<div class="card">
+    <h2>Order Info</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+        <tr><td style="padding:6px 0;color:#6b7280;width:120px">Status</td><td><span class="badge badge-@po.Status.ToString().ToLower()">@po.Status</span></td></tr>
+        <tr><td style="padding:6px 0;color:#6b7280">Vendor</td><td>@po.Vendor?.Name</td></tr>
+        <tr><td style="padding:6px 0;color:#6b7280">Campus</td><td>@po.Campus?.Name</td></tr>
+        <tr><td style="padding:6px 0;color:#6b7280">Order Date</td><td>@po.OrderDate.ToString("MMMM d, yyyy")</td></tr>
+        <tr><td style="padding:6px 0;color:#6b7280">Expected</td><td>@(po.ExpectedDelivery?.ToString("MMMM d, yyyy") ?? "—")</td></tr>
+        <tr><td style="padding:6px 0;color:#6b7280">Notes</td><td>@(po.Notes ?? "—")</td></tr>
+    </table>
+</div>
+
+<div>
+<div class="card" style="padding:0">
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #f1f3f5">
+        <h2 style="margin:0">Line Items</h2>
+    </div>
+    <table class="mip-table">
+        <thead>
+            <tr>
+                <th>Description</th>
+                <th>Qty Ordered</th>
+                <th>Unit</th>
+                <th>Unit Cost</th>
+                <th>Total</th>
+                <th>Received</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var line in po.Lines)
+            {
+                <tr>
+                    <td>@line.Description</td>
+                    <td>@line.QuantityOrdered.ToString("N2")</td>
+                    <td>@line.Unit</td>
+                    <td>$@line.UnitCost.ToString("N2")</td>
+                    <td>$@line.LineTotal.ToString("N2")</td>
+                    <td>
+                        @if (line.IsReceived)
+                        {
+                            <span class="badge badge-received">✓ Received</span>
+                        }
+                        else if (line.QuantityReceived > 0)
+                        {
+                            <span class="badge badge-warning">Partial (@line.QuantityReceived.ToString("N0"))</span>
+                        }
+                        else
+                        {
+                            <span class="badge badge-draft">Pending</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="4" style="text-align:right;font-weight:600;padding:12px 14px">Total:</td>
+                <td style="font-weight:700;padding:12px 14px">$@po.Lines.Sum(l => l.LineTotal).ToString("N2")</td>
+                <td></td>
+            </tr>
+        </tfoot>
+    </table>
+</div>
+
+@if (!string.IsNullOrEmpty(message))
+{
+    <div style="background:#d1fae5;color:#065f46;border-radius:8px;padding:12px;margin-top:12px">@message</div>
+}
+</div>
+</div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    private MiChoice.Procurement.Domain.Entities.PurchaseOrder? po;
+    private string message = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        po = await Db.PurchaseOrders
+            .Include(p => p.Vendor)
+            .Include(p => p.Campus)
+            .Include(p => p.Lines)
+            .FirstOrDefaultAsync(p => p.Id == Id);
+    }
+
+    private async Task SubmitPO()
+    {
+        if (po == null) return;
+        po.Status = PurchaseOrderStatus.Submitted;
+        await Db.SaveChangesAsync();
+        message = "PO submitted to vendor.";
+    }
+
+    private async Task ReceivePO()
+    {
+        if (po == null) return;
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        foreach (var line in po.Lines)
+        {
+            line.QuantityReceived = line.QuantityOrdered;
+            line.DateReceived = today;
+
+            // Create inventory transactions for each line with an inventory item
+            if (line.InventoryItemId.HasValue)
+            {
+                var tx = new InventoryTransaction
+                {
+                    InventoryItemId = line.InventoryItemId.Value,
+                    CampusId = po.CampusId,
+                    TransactionType = InventoryTransactionType.Received,
+                    Quantity = line.QuantityOrdered,
+                    UnitCost = line.UnitCost,
+                    TransactionDate = today,
+                    ReferenceId = po.Id,
+                    ReferenceType = "PurchaseOrder",
+                    Notes = $"Received via PO-{po.Id:D4}"
+                };
+                Db.InventoryTransactions.Add(tx);
+
+                // Update or create stock record
+                var stock = await Db.InventoryStocks
+                    .FirstOrDefaultAsync(s => s.InventoryItemId == line.InventoryItemId.Value && s.CampusId == po.CampusId);
+                if (stock == null)
+                {
+                    stock = new InventoryStock { InventoryItemId = line.InventoryItemId.Value, CampusId = po.CampusId, CurrentStock = 0 };
+                    Db.InventoryStocks.Add(stock);
+                }
+                stock.CurrentStock += line.QuantityOrdered;
+                stock.LastUpdated = DateTimeOffset.UtcNow;
+            }
+        }
+
+        po.Status = PurchaseOrderStatus.Received;
+        await Db.SaveChangesAsync();
+        message = $"PO received on {today:MMMM d, yyyy}. Inventory updated.";
+        StateHasChanged();
+    }
+}

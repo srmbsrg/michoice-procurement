@@ -1,0 +1,189 @@
+@page "/"
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Infrastructure.Data
+@using Microsoft.EntityFrameworkCore
+@inject IAgenticInsightService AgenticSvc
+@inject ProcurementDbContext Db
+
+<PageTitle>Dashboard — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Dashboard</div>
+        <div class="page-sub">@DateTime.Today.ToString("dddd, MMMM d, yyyy")</div>
+    </div>
+    <div class="filters-bar">
+        <label class="form-label" style="margin:0">Campus:</label>
+        <select class="form-control" style="width:200px" @onchange="OnCampusChange">
+            <option value="0">All Campuses</option>
+            @foreach (var c in campuses)
+            {
+                <option value="@c.Id">@c.Name</option>
+            }
+        </select>
+    </div>
+</div>
+
+<!-- Stat Cards -->
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="card-title">Open Purchase Orders</div>
+        <div class="card-value">@openPOs</div>
+        <div class="card-sub">@draftPOs draft · @submittedPOs submitted</div>
+    </div>
+    <div class="stat-card @(lowStockItems > 5 ? "danger" : lowStockItems > 0 ? "warn" : "")">
+        <div class="card-title">Low Stock Items</div>
+        <div class="card-value">@lowStockItems</div>
+        <div class="card-sub">At or below reorder point</div>
+    </div>
+    <div class="stat-card @(entitlementPct < 60 ? "danger" : entitlementPct < 85 ? "warn" : "")">
+        <div class="card-title">Entitlement Remaining</div>
+        <div class="card-value">@entitlementPct.ToString("F0")%</div>
+        <div class="card-sub">$@remainingEntitlement.ToString("N0") of $@totalEntitlement.ToString("N0")</div>
+    </div>
+    <div class="stat-card @(weekWastePct > 15 ? "danger" : weekWastePct > 10 ? "warn" : "")">
+        <div class="card-title">This Week's Waste</div>
+        <div class="card-value">@weekWastePct.ToString("F1")%</div>
+        <div class="card-sub">@weekWasteQty.ToString("N0") units wasted this week</div>
+    </div>
+</div>
+
+<!-- miAgentic Panel -->
+@if (reorderInsight != null)
+{
+    <div class="agentic-panel" style="margin-bottom:24px">
+        <div class="ap-label">⚡ miAgentic — Reorder Alert</div>
+        <div class="ap-insight">@reorderInsight.Insight</div>
+    </div>
+}
+
+<!-- Two-column: recent activity + entitlement progress -->
+<div class="two-col">
+    <div class="card">
+        <h2>Recent Activity</h2>
+        @if (!recentPOs.Any())
+        {
+            <p style="color:#6b7280">No recent purchase orders.</p>
+        }
+        else
+        {
+            <table class="mip-table">
+                <thead>
+                    <tr>
+                        <th>PO #</th>
+                        <th>Vendor</th>
+                        <th>Campus</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var po in recentPOs)
+                    {
+                        <tr>
+                            <td><a href="/purchase-orders/@po.Id" style="color:#1a6b3a;text-decoration:none;font-weight:500">PO-@po.Id.ToString("D4")</a></td>
+                            <td>@po.Vendor?.Name</td>
+                            <td>@po.Campus?.Name</td>
+                            <td><span class="badge badge-@po.Status.ToString().ToLower()">@po.Status</span></td>
+                            <td>@po.OrderDate.ToString("MMM d")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="card">
+        <h2>USDA Entitlement</h2>
+        @if (entitlement != null)
+        {
+            <div style="margin-bottom:14px">
+                <div style="font-size:0.85rem;color:#6b7280">School Year @(entitlement.SchoolYear-1)–@(entitlement.SchoolYear%100)</div>
+                <div style="font-size:1.6rem;font-weight:700;margin:6px 0">$@entitlement.RemainingDollars.ToString("N2") <span style="font-size:0.9rem;color:#6b7280;font-weight:400">remaining</span></div>
+                <div class="progress-bar-wrap">
+                    <div class="progress-bar-fill @(entitlementPct < 60 ? "danger" : entitlementPct < 85 ? "warn" : "")" style="width:@((100-entitlementPct).ToString("F0"))%"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:#6b7280;margin-top:5px">
+                    <span>Used: $@entitlement.UsedDollars.ToString("N2")</span>
+                    <span>Total: $@entitlement.TotalDollars.ToString("N2")</span>
+                </div>
+            </div>
+            @if (entitlementInsight != null)
+            {
+                <div style="background:#f0fdf4;border-radius:8px;padding:12px;font-size:0.84rem;color:#065f46;border-left:3px solid #1a6b3a">
+                    @entitlementInsight.Insight
+                </div>
+            }
+        }
+        else
+        {
+            <p style="color:#6b7280">No active entitlement for current school year.</p>
+        }
+    </div>
+</div>
+
+@code {
+    private List<MiChoice.Procurement.Domain.Entities.Campus> campuses = new();
+    private List<MiChoice.Procurement.Domain.Entities.PurchaseOrder> recentPOs = new();
+    private MiChoice.Procurement.Domain.Entities.Entitlement? entitlement;
+    private AgenticInsight? reorderInsight;
+    private AgenticInsight? entitlementInsight;
+
+    private int selectedCampusId = 0;
+    private int openPOs, draftPOs, submittedPOs, lowStockItems;
+    private decimal totalEntitlement, remainingEntitlement, entitlementPct;
+    private decimal weekWastePct, weekWasteQty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+        await LoadData();
+    }
+
+    private async Task OnCampusChange(ChangeEventArgs e)
+    {
+        selectedCampusId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        var poQuery = Db.PurchaseOrders.Include(p => p.Vendor).Include(p => p.Campus).AsQueryable();
+        if (selectedCampusId > 0) poQuery = poQuery.Where(p => p.CampusId == selectedCampusId);
+
+        openPOs = await poQuery.CountAsync(p => p.Status == MiChoice.Procurement.Domain.Enums.PurchaseOrderStatus.Draft || p.Status == MiChoice.Procurement.Domain.Enums.PurchaseOrderStatus.Submitted);
+        draftPOs = await poQuery.CountAsync(p => p.Status == MiChoice.Procurement.Domain.Enums.PurchaseOrderStatus.Draft);
+        submittedPOs = await poQuery.CountAsync(p => p.Status == MiChoice.Procurement.Domain.Enums.PurchaseOrderStatus.Submitted);
+
+        recentPOs = await poQuery.OrderByDescending(p => p.CreatedAt).Take(8).ToListAsync();
+
+        // Low stock
+        var stockQuery = Db.InventoryStocks.Include(s => s.InventoryItem).AsQueryable();
+        if (selectedCampusId > 0) stockQuery = stockQuery.Where(s => s.CampusId == selectedCampusId);
+        lowStockItems = await stockQuery.CountAsync(s => s.CurrentStock <= s.InventoryItem.ReorderPoint && s.InventoryItem.IsActive);
+
+        // Entitlement
+        var year = DateTime.Today.Month >= 7 ? DateTime.Today.Year + 1 : DateTime.Today.Year;
+        entitlement = await Db.Entitlements.Include(e => e.EntitlementOrders).FirstOrDefaultAsync(e => e.SchoolYear == year);
+        if (entitlement != null)
+        {
+            totalEntitlement = entitlement.TotalDollars;
+            remainingEntitlement = entitlement.RemainingDollars;
+            entitlementPct = totalEntitlement > 0 ? (remainingEntitlement / totalEntitlement * 100) : 0;
+        }
+
+        // Waste this week
+        var weekStart = DateOnly.FromDateTime(DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek));
+        var wasteQuery = Db.WasteLogs.Where(w => w.ServiceDate >= weekStart);
+        if (selectedCampusId > 0) wasteQuery = wasteQuery.Where(w => w.CampusId == selectedCampusId);
+        var wastes = await wasteQuery.ToListAsync();
+        weekWasteQty = wastes.Sum(w => w.WasteQuantity);
+        var totalProduced = wastes.Sum(w => w.ProducedQuantity);
+        weekWastePct = totalProduced > 0 ? (weekWasteQty / totalProduced * 100) : 0;
+
+        // Agentic
+        var campusId = selectedCampusId > 0 ? selectedCampusId : 1;
+        reorderInsight = await AgenticSvc.GetReorderInsightAsync(campusId);
+        entitlementInsight = await AgenticSvc.GetEntitlementInsightAsync(year);
+    }
+}

@@ -1,0 +1,118 @@
+@page "/purchase-orders"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject NavigationManager Nav
+
+<PageTitle>Purchase Orders — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Purchase Orders</div>
+        <div class="page-sub">Manage vendor orders across all campuses</div>
+    </div>
+    <a href="/purchase-orders/new" class="btn btn-primary">+ New PO</a>
+</div>
+
+<div class="card" style="padding:0">
+    <div class="filters-bar" style="padding:16px 20px;margin:0;border-bottom:1px solid #f1f3f5">
+        <select class="form-control" style="width:160px" @onchange="OnStatusFilter">
+            <option value="">All Statuses</option>
+            @foreach (var s in Enum.GetValues<PurchaseOrderStatus>())
+            {
+                <option value="@s">@s</option>
+            }
+        </select>
+        <select class="form-control" style="width:200px" @onchange="OnCampusFilter">
+            <option value="0">All Campuses</option>
+            @foreach (var c in campuses)
+            {
+                <option value="@c.Id">@c.Name</option>
+            }
+        </select>
+        <input class="form-control" style="width:220px" placeholder="Search vendor..." @oninput="OnSearch" />
+    </div>
+
+    <table class="mip-table">
+        <thead>
+            <tr>
+                <th>PO #</th>
+                <th>Vendor</th>
+                <th>Campus</th>
+                <th>Order Date</th>
+                <th>Expected</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!orders.Any())
+            {
+                <tr><td colspan="8" style="text-align:center;color:#6b7280;padding:32px">No purchase orders found.</td></tr>
+            }
+            @foreach (var po in orders)
+            {
+                <tr>
+                    <td style="font-weight:600">PO-@po.Id.ToString("D4")</td>
+                    <td>@po.Vendor?.Name</td>
+                    <td>@po.Campus?.Name</td>
+                    <td>@po.OrderDate.ToString("MMM d, yyyy")</td>
+                    <td>@(po.ExpectedDelivery?.ToString("MMM d") ?? "—")</td>
+                    <td>$@po.Lines.Sum(l => l.LineTotal).ToString("N2")</td>
+                    <td><span class="badge badge-@po.Status.ToString().ToLower()">@po.Status</span></td>
+                    <td><a href="/purchase-orders/@po.Id" class="btn btn-sm btn-secondary">View</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<MiChoice.Procurement.Domain.Entities.PurchaseOrder> orders = new();
+    private List<MiChoice.Procurement.Domain.Entities.Campus> campuses = new();
+    private PurchaseOrderStatus? statusFilter;
+    private int campusFilter;
+    private string search = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+        await LoadOrders();
+    }
+
+    private void OnStatusFilter(ChangeEventArgs e)
+    {
+        statusFilter = string.IsNullOrEmpty(e.Value?.ToString()) ? null : Enum.Parse<PurchaseOrderStatus>(e.Value.ToString()!);
+        _ = LoadOrders();
+    }
+
+    private void OnCampusFilter(ChangeEventArgs e)
+    {
+        campusFilter = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        _ = LoadOrders();
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        search = e.Value?.ToString() ?? "";
+        _ = LoadOrders();
+    }
+
+    private async Task LoadOrders()
+    {
+        var q = Db.PurchaseOrders
+            .Include(p => p.Vendor)
+            .Include(p => p.Campus)
+            .Include(p => p.Lines)
+            .AsQueryable();
+
+        if (statusFilter.HasValue) q = q.Where(p => p.Status == statusFilter.Value);
+        if (campusFilter > 0) q = q.Where(p => p.CampusId == campusFilter);
+        if (!string.IsNullOrWhiteSpace(search))
+            q = q.Where(p => p.Vendor!.Name.Contains(search));
+
+        orders = await q.OrderByDescending(p => p.CreatedAt).ToListAsync();
+    }
+}
