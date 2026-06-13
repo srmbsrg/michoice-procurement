@@ -1,0 +1,250 @@
+@page "/commodities"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService AgenticSvc
+
+<PageTitle>Commodities — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Commodities &amp; Entitlement</div>
+        <div class="page-sub">USDA commodity catalog and annual entitlement tracking</div>
+    </div>
+</div>
+
+@if (entitlementInsight != null)
+{
+    <div class="agentic-panel" style="margin-bottom:24px">
+        <div class="ap-label">⚡ miAgentic — Entitlement Advisory</div>
+        <div class="ap-insight">@entitlementInsight.Insight</div>
+    </div>
+}
+
+<div class="two-col" style="align-items:start">
+
+<!-- LEFT: Entitlement Tracker -->
+<div>
+<div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <h2 style="margin:0">Entitlement Tracker</h2>
+        <select class="form-control" style="width:130px" @onchange="OnYearChange">
+            @for (int y = DateTime.Today.Year + 1; y >= DateTime.Today.Year - 2; y--)
+            {
+                var yr = y;
+                <option value="@yr" selected="@(yr == selectedYear)">SY @(yr-1)-@(yr%100)</option>
+            }
+        </select>
+    </div>
+
+    @if (entitlement != null)
+    {
+        <div style="margin-bottom:18px">
+            <div style="font-size:2rem;font-weight:700">$@entitlement.RemainingDollars.ToString("N2")</div>
+            <div style="font-size:0.85rem;color:#6b7280">remaining of $@entitlement.TotalDollars.ToString("N2") total</div>
+            <div class="progress-bar-wrap" style="margin-top:10px">
+                @{ var usedPct = entitlement.TotalDollars > 0 ? (double)(entitlement.UsedDollars / entitlement.TotalDollars * 100) : 0; }
+                <div class="progress-bar-fill @(usedPct > 90 ? "danger" : usedPct > 75 ? "warn" : "")"
+                     style="width:@usedPct.ToString("F0")%"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:#6b7280;margin-top:4px">
+                <span>Used: $@entitlement.UsedDollars.ToString("N2")</span>
+                <span>@usedPct.ToString("F0")% spent</span>
+            </div>
+        </div>
+
+        <h2>Orders</h2>
+        @if (!entitlement.EntitlementOrders.Any())
+        {
+            <p style="color:#6b7280;font-size:0.88rem">No entitlement orders placed yet.</p>
+        }
+        else
+        {
+            <table class="mip-table">
+                <thead><tr><th>Code</th><th>Item</th><th>Qty</th><th>Cost</th><th>Total</th><th>Status</th></tr></thead>
+                <tbody>
+                    @foreach (var eo in entitlement.EntitlementOrders)
+                    {
+                        <tr>
+                            <td style="font-family:monospace">@eo.CommodityItem?.UsdaCatalogCode</td>
+                            <td>@eo.CommodityItem?.Description</td>
+                            <td>@eo.QuantityOrdered.ToString("N0") @eo.CommodityItem?.UnitOfMeasure</td>
+                            <td>$@eo.UnitCost.ToString("N2")</td>
+                            <td>$@eo.TotalCost.ToString("N2")</td>
+                            <td><span class="badge badge-@(eo.Status == EntitlementOrderStatus.Received ? "received" : eo.Status == EntitlementOrderStatus.Cancelled ? "cancelled" : "submitted")">@eo.Status</span></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <!-- Place Order Form -->
+        <div style="margin-top:20px;border-top:1px solid #e5e7eb;padding-top:16px">
+            <h2>Place Entitlement Order</h2>
+            <div class="form-group">
+                <label class="form-label">Commodity Item</label>
+                <select class="form-control" @bind="newOrder.CommodityItemId">
+                    <option value="0">— Select commodity —</option>
+                    @foreach (var ci in commodityItems)
+                    {
+                        <option value="@ci.Id">@ci.UsdaCatalogCode — @ci.Description</option>
+                    }
+                </select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div class="form-group">
+                    <label class="form-label">Quantity</label>
+                    <input type="number" class="form-control" @bind="newOrder.QuantityOrdered" min="0" step="1" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Unit Cost ($)</label>
+                    <input type="number" class="form-control" @bind="newOrder.UnitCost" min="0" step="0.01" />
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(orderMsg))
+            {
+                <div style="background:@(orderMsg.StartsWith("Error") ? "#fee2e2" : "#d1fae5");color:@(orderMsg.StartsWith("Error") ? "#991b1b" : "#065f46");border-radius:8px;padding:10px;margin-bottom:10px;font-size:0.85rem">@orderMsg</div>
+            }
+            <button class="btn btn-primary" @onclick="PlaceEntitlementOrder">Place Order</button>
+        </div>
+    }
+    else
+    {
+        <p style="color:#6b7280">No entitlement found for SY @(selectedYear-1)–@(selectedYear%100).</p>
+    }
+</div>
+</div>
+
+<!-- RIGHT: Commodity Catalog -->
+<div>
+<div class="card" style="padding:0">
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #f1f3f5;display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">USDA Commodity Catalog</h2>
+        <button class="btn btn-primary btn-sm" @onclick="() => showAddCommodity = !showAddCommodity">+ Add Item</button>
+    </div>
+
+    @if (showAddCommodity)
+    {
+        <div style="padding:16px 22px;border-bottom:1px solid #f1f3f5;background:#f8fafc">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+                <div>
+                    <label class="form-label">Catalog Code</label>
+                    <input class="form-control" @bind="newCommodity.UsdaCatalogCode" placeholder="e.g. A099" />
+                </div>
+                <div>
+                    <label class="form-label">Category</label>
+                    <select class="form-control" @bind="newCommodity.Category">
+                        @foreach (var cat in Enum.GetValues<CommodityCategory>())
+                        { <option value="@cat">@cat</option> }
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">Unit</label>
+                    <input class="form-control" @bind="newCommodity.UnitOfMeasure" placeholder="LB, CS, etc." />
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+                <div>
+                    <label class="form-label">Description</label>
+                    <input class="form-control" @bind="newCommodity.Description" placeholder="Item description" />
+                </div>
+                <div>
+                    <label class="form-label">Est. Unit Cost</label>
+                    <input type="number" class="form-control" @bind="newCommodity.EstimatedUnitCost" min="0" step="0.01" />
+                </div>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-primary btn-sm" @onclick="SaveCommodity">Save</button>
+                <button class="btn btn-secondary btn-sm" @onclick="() => showAddCommodity = false">Cancel</button>
+            </div>
+        </div>
+    }
+
+    <table class="mip-table">
+        <thead>
+            <tr><th>Code</th><th>Description</th><th>Category</th><th>Unit</th><th>Est. Cost</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var ci in commodityItems)
+            {
+                <tr>
+                    <td style="font-family:monospace;font-weight:600">@ci.UsdaCatalogCode</td>
+                    <td>@ci.Description</td>
+                    <td><span class="badge badge-draft">@ci.Category</span></td>
+                    <td>@ci.UnitOfMeasure</td>
+                    <td>$@ci.EstimatedUnitCost.ToString("N2")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+</div>
+
+</div>
+
+@code {
+    private List<CommodityItem> commodityItems = new();
+    private Entitlement? entitlement;
+    private AgenticInsight? entitlementInsight;
+    private int selectedYear;
+    private CommodityItem newCommodity = new() { UnitOfMeasure = "CS" };
+    private EntitlementOrder newOrder = new() { QuantityOrdered = 1 };
+    private bool showAddCommodity;
+    private string orderMsg = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        selectedYear = DateTime.Today.Month >= 7 ? DateTime.Today.Year + 1 : DateTime.Today.Year;
+        commodityItems = await Db.CommodityItems.Where(c => c.IsActive).OrderBy(c => c.UsdaCatalogCode).ToListAsync();
+        entitlementInsight = await AgenticSvc.GetEntitlementInsightAsync(selectedYear);
+        await LoadEntitlement();
+    }
+
+    private async Task OnYearChange(ChangeEventArgs e)
+    {
+        selectedYear = int.TryParse(e.Value?.ToString(), out var y) ? y : selectedYear;
+        await LoadEntitlement();
+    }
+
+    private async Task LoadEntitlement()
+    {
+        entitlement = await Db.Entitlements
+            .Include(e => e.EntitlementOrders).ThenInclude(eo => eo.CommodityItem)
+            .FirstOrDefaultAsync(e => e.SchoolYear == selectedYear);
+    }
+
+    private async Task SaveCommodity()
+    {
+        if (string.IsNullOrWhiteSpace(newCommodity.UsdaCatalogCode) || string.IsNullOrWhiteSpace(newCommodity.Description)) return;
+        Db.CommodityItems.Add(newCommodity);
+        await Db.SaveChangesAsync();
+        commodityItems = await Db.CommodityItems.Where(c => c.IsActive).OrderBy(c => c.UsdaCatalogCode).ToListAsync();
+        newCommodity = new() { UnitOfMeasure = "CS" };
+        showAddCommodity = false;
+    }
+
+    private async Task PlaceEntitlementOrder()
+    {
+        orderMsg = "";
+        if (entitlement == null) { orderMsg = "No active entitlement for this year."; return; }
+        if (newOrder.CommodityItemId == 0) { orderMsg = "Error: Select a commodity item."; return; }
+        if (newOrder.QuantityOrdered <= 0) { orderMsg = "Error: Quantity must be greater than zero."; return; }
+        var totalCost = newOrder.QuantityOrdered * newOrder.UnitCost;
+        if (totalCost > entitlement.RemainingDollars)
+        {
+            orderMsg = $"Error: Order total ${totalCost:N2} exceeds remaining entitlement ${entitlement.RemainingDollars:N2}.";
+            return;
+        }
+        newOrder.EntitlementId = entitlement.Id;
+        newOrder.Status = EntitlementOrderStatus.Ordered;
+        newOrder.OrderedAt = DateTimeOffset.UtcNow;
+        Db.EntitlementOrders.Add(newOrder);
+        await Db.SaveChangesAsync();
+        orderMsg = $"Order placed: ${totalCost:N2}. Remaining: ${entitlement.RemainingDollars - totalCost:N2}";
+        newOrder = new() { QuantityOrdered = 1 };
+        await LoadEntitlement();
+    }
+}

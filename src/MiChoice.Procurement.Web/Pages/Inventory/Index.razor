@@ -1,0 +1,189 @@
+@page "/inventory"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService AgenticSvc
+
+<PageTitle>Inventory — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Inventory</div>
+        <div class="page-sub">Campus stock levels and adjustments</div>
+    </div>
+</div>
+
+@if (reorderInsight != null)
+{
+    <div class="agentic-panel" style="margin-bottom:24px">
+        <div class="ap-label">⚡ miAgentic — Reorder Alert</div>
+        <div class="ap-insight">@reorderInsight.Insight</div>
+    </div>
+}
+
+<div class="filters-bar" style="margin-bottom:16px">
+    <select class="form-control" style="width:200px" @onchange="OnCampusChange">
+        <option value="0">All Campuses</option>
+        @foreach (var c in campuses)
+        {
+            <option value="@c.Id">@c.Name</option>
+        }
+    </select>
+    <input class="form-control" style="width:200px" placeholder="Filter by category…" @oninput="OnCategoryFilter" />
+    <input class="form-control" style="width:220px" placeholder="Search item…" @oninput="OnSearch" />
+</div>
+
+<div class="card" style="padding:0">
+    <table class="mip-table">
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Category</th>
+                <th>Campus</th>
+                <th>Unit</th>
+                <th>Current Stock</th>
+                <th>Reorder Point</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!stocks.Any())
+            {
+                <tr><td colspan="8" style="text-align:center;padding:32px;color:#6b7280">No inventory records found. Receive a purchase order to populate stock.</td></tr>
+            }
+            @foreach (var s in stocks)
+            {
+                <tr>
+                    <td style="font-weight:500">@s.InventoryItem.Name</td>
+                    <td>@(s.InventoryItem.Category ?? "—")</td>
+                    <td>@s.Campus.Name</td>
+                    <td>@s.InventoryItem.UnitOfMeasure</td>
+                    <td style="font-weight:600">@s.CurrentStock.ToString("N2")</td>
+                    <td>@s.InventoryItem.ReorderPoint.ToString("N2")</td>
+                    <td>
+                        @if (s.CurrentStock == 0)
+                        { <span class="badge badge-cancelled">Out of Stock</span> }
+                        else if (s.CurrentStock <= s.InventoryItem.ReorderPoint)
+                        { <span class="badge badge-warning">Low Stock</span> }
+                        else
+                        { <span class="badge badge-ok">OK</span> }
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-secondary" @onclick="() => ToggleAdjust(s)">Adjust</button>
+                    </td>
+                </tr>
+                @if (adjustingStockId == s.Id)
+                {
+                    <tr>
+                        <td colspan="8" style="background:#f8fafc;padding:16px 20px">
+                            <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+                                <div>
+                                    <label class="form-label">Type</label>
+                                    <select class="form-control" style="width:120px" @bind="adjType">
+                                        <option>Add</option>
+                                        <option>Remove</option>
+                                        <option>Set</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="form-label">Quantity</label>
+                                    <input type="number" class="form-control" style="width:100px" @bind="adjQty" min="0" step="0.01" />
+                                </div>
+                                <div style="flex:1">
+                                    <label class="form-label">Notes</label>
+                                    <input class="form-control" @bind="adjNotes" placeholder="Reason for adjustment…" />
+                                </div>
+                                <button class="btn btn-primary btn-sm" @onclick="() => SaveAdjustment(s)">Save</button>
+                                <button class="btn btn-secondary btn-sm" @onclick="() => adjustingStockId = 0">Cancel</button>
+                            </div>
+                            @if (!string.IsNullOrEmpty(adjMessage))
+                            {
+                                <div style="margin-top:8px;color:#065f46;font-size:0.85rem">@adjMessage</div>
+                            }
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<InventoryStock> stocks = new();
+    private List<Campus> campuses = new();
+    private AgenticInsight? reorderInsight;
+    private int selectedCampusId;
+    private string categoryFilter = "";
+    private string search = "";
+    private int adjustingStockId;
+    private string adjType = "Add";
+    private decimal adjQty;
+    private string adjNotes = "";
+    private string adjMessage = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+        reorderInsight = await AgenticSvc.GetReorderInsightAsync(1);
+        await LoadStocks();
+    }
+
+    private void ToggleAdjust(InventoryStock s)
+    {
+        adjustingStockId = adjustingStockId == s.Id ? 0 : s.Id;
+        adjType = "Add"; adjQty = 0; adjNotes = ""; adjMessage = "";
+    }
+
+    private void OnCampusChange(ChangeEventArgs e)
+    {
+        selectedCampusId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        _ = LoadStocks();
+    }
+    private void OnCategoryFilter(ChangeEventArgs e) { categoryFilter = e.Value?.ToString() ?? ""; _ = LoadStocks(); }
+    private void OnSearch(ChangeEventArgs e) { search = e.Value?.ToString() ?? ""; _ = LoadStocks(); }
+
+    private async Task LoadStocks()
+    {
+        var q = Db.InventoryStocks.Include(s => s.InventoryItem).Include(s => s.Campus)
+            .Where(s => s.InventoryItem.IsActive).AsQueryable();
+        if (selectedCampusId > 0) q = q.Where(s => s.CampusId == selectedCampusId);
+        if (!string.IsNullOrWhiteSpace(categoryFilter))
+            q = q.Where(s => s.InventoryItem.Category != null && s.InventoryItem.Category.Contains(categoryFilter));
+        if (!string.IsNullOrWhiteSpace(search))
+            q = q.Where(s => s.InventoryItem.Name.Contains(search));
+        stocks = await q.OrderBy(s => s.InventoryItem.Name).ToListAsync();
+    }
+
+    private async Task SaveAdjustment(InventoryStock s)
+    {
+        adjMessage = "";
+        var before = s.CurrentStock;
+        s.CurrentStock = adjType switch
+        {
+            "Add" => s.CurrentStock + adjQty,
+            "Remove" => Math.Max(0, s.CurrentStock - adjQty),
+            "Set" => adjQty,
+            _ => s.CurrentStock
+        };
+        s.LastUpdated = DateTimeOffset.UtcNow;
+
+        var tx = new InventoryTransaction
+        {
+            InventoryItemId = s.InventoryItemId,
+            CampusId = s.CampusId,
+            TransactionType = InventoryTransactionType.Adjustment,
+            Quantity = s.CurrentStock - before,
+            TransactionDate = DateOnly.FromDateTime(DateTime.Today),
+            Notes = adjNotes,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        Db.InventoryTransactions.Add(tx);
+        await Db.SaveChangesAsync();
+        adjMessage = $"Stock updated: {before:N2} → {s.CurrentStock:N2} {s.InventoryItem.UnitOfMeasure}";
+        adjustingStockId = 0;
+    }
+}

@@ -1,0 +1,177 @@
+@page "/waste"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService AgenticSvc
+
+<PageTitle>Waste Log — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Waste Log</div>
+        <div class="page-sub">Track production vs. service quantities to identify waste patterns</div>
+    </div>
+</div>
+
+@if (wasteInsight != null)
+{
+    <div class="agentic-panel" style="margin-bottom:24px">
+        <div class="ap-label">⚡ miAgentic — Waste Analysis</div>
+        <div class="ap-insight">@wasteInsight.Insight</div>
+    </div>
+}
+
+<div class="two-col" style="align-items:start">
+
+<!-- Entry Form -->
+<div class="card">
+    <h2>Log Waste Entry</h2>
+    <div class="form-group">
+        <label class="form-label">Campus *</label>
+        <select class="form-control" @bind="entry.CampusId">
+            <option value="0">— Select campus —</option>
+            @foreach (var c in campuses)
+            { <option value="@c.Id">@c.Name</option> }
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Service Date *</label>
+        <input type="date" class="form-control" @bind="serviceDateStr" />
+    </div>
+    <div class="form-group">
+        <label class="form-label">Menu Item Name *</label>
+        <input class="form-control" @bind="entry.MenuItemName" placeholder="e.g. Beef Patty Sandwich" />
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Produced Qty</label>
+            <input type="number" class="form-control" @bind="entry.ProducedQuantity" min="0" step="1" @oninput="RecalcWaste" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Served Qty</label>
+            <input type="number" class="form-control" @bind="entry.ServedQuantity" min="0" step="1" @oninput="RecalcWaste" />
+        </div>
+    </div>
+
+    @if (entry.ProducedQuantity > 0)
+    {
+        <div style="background:@(entry.WastePercent > 20 ? "#fee2e2" : entry.WastePercent > 10 ? "#fef3c7" : "#d1fae5");border-radius:8px;padding:12px;margin-bottom:14px;font-size:0.88rem">
+            Waste: <strong>@entry.WasteQuantity.ToString("N0")</strong> units
+            (<strong>@entry.WastePercent.ToString("F1")%</strong>)
+        </div>
+    }
+
+    <div class="form-group">
+        <label class="form-label">Waste Reason</label>
+        <select class="form-control" @bind="entry.WasteReason">
+            <option value="">— Select reason —</option>
+            <option>Over-production</option>
+            <option>Low participation</option>
+            <option>Quality issue</option>
+            <option>Spoilage</option>
+            <option>Temperature abuse</option>
+            <option>Other</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-control" rows="2" @bind="entry.Notes"></textarea>
+    </div>
+
+    @if (!string.IsNullOrEmpty(entryMsg))
+    {
+        <div style="background:#d1fae5;color:#065f46;border-radius:8px;padding:10px;margin-bottom:10px;font-size:0.85rem">@entryMsg</div>
+    }
+    <button class="btn btn-primary" @onclick="SaveEntry">Save Waste Entry</button>
+</div>
+
+<!-- History -->
+<div class="card" style="padding:0">
+    <div style="padding:16px 22px;border-bottom:1px solid #f1f3f5;display:flex;align-items:center;gap:12px">
+        <h2 style="margin:0;flex:1">Waste History</h2>
+        <select class="form-control" style="width:190px" @onchange="OnHistoryCampusChange">
+            <option value="0">All Campuses</option>
+            @foreach (var c in campuses)
+            { <option value="@c.Id">@c.Name</option> }
+        </select>
+    </div>
+    <table class="mip-table">
+        <thead>
+            <tr><th>Date</th><th>Campus</th><th>Menu Item</th><th>Prod.</th><th>Served</th><th>Waste</th><th>%</th><th>Reason</th></tr>
+        </thead>
+        <tbody>
+            @if (!history.Any())
+            {
+                <tr><td colspan="8" style="text-align:center;padding:28px;color:#6b7280">No waste logs recorded yet.</td></tr>
+            }
+            @foreach (var w in history)
+            {
+                <tr>
+                    <td>@w.ServiceDate.ToString("MMM d")</td>
+                    <td>@w.Campus.Name</td>
+                    <td style="font-weight:500">@w.MenuItemName</td>
+                    <td>@w.ProducedQuantity.ToString("N0")</td>
+                    <td>@w.ServedQuantity.ToString("N0")</td>
+                    <td style="font-weight:600">@w.WasteQuantity.ToString("N0")</td>
+                    <td>
+                        <span style="font-weight:600;color:@(w.WastePercent > 20 ? "#ef4444" : w.WastePercent > 10 ? "#d97706" : "#065f46")">
+                            @w.WastePercent.ToString("F1")%
+                        </span>
+                    </td>
+                    <td>@(w.WasteReason ?? "—")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+</div>
+
+@code {
+    private List<Campus> campuses = new();
+    private List<WasteLog> history = new();
+    private AgenticInsight? wasteInsight;
+    private WasteLog entry = new() { ProducedQuantity = 0, ServedQuantity = 0 };
+    private string serviceDateStr = DateTime.Today.ToString("yyyy-MM-dd");
+    private string entryMsg = "";
+    private int histCampusId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+        var week = DateOnly.FromDateTime(DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek));
+        wasteInsight = await AgenticSvc.GetWasteInsightAsync(1, week);
+        await LoadHistory();
+    }
+
+    private void RecalcWaste(ChangeEventArgs _) => StateHasChanged();
+
+    private void OnHistoryCampusChange(ChangeEventArgs e)
+    {
+        histCampusId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        _ = LoadHistory();
+    }
+
+    private async Task LoadHistory()
+    {
+        var q = Db.WasteLogs.Include(w => w.Campus).AsQueryable();
+        if (histCampusId > 0) q = q.Where(w => w.CampusId == histCampusId);
+        history = await q.OrderByDescending(w => w.ServiceDate).Take(100).ToListAsync();
+    }
+
+    private async Task SaveEntry()
+    {
+        entryMsg = "";
+        if (entry.CampusId == 0 || string.IsNullOrWhiteSpace(entry.MenuItemName)) { entryMsg = "Campus and menu item are required."; return; }
+        entry.ServiceDate = DateOnly.TryParse(serviceDateStr, out var d) ? d : DateOnly.FromDateTime(DateTime.Today);
+        entry.CreatedAt = DateTimeOffset.UtcNow;
+        Db.WasteLogs.Add(entry);
+        await Db.SaveChangesAsync();
+        entryMsg = $"Logged: {entry.WasteQuantity:N0} units wasted ({entry.WastePercent:F1}%) on {entry.ServiceDate:MMM d}";
+        entry = new() { ProducedQuantity = 0, ServedQuantity = 0 };
+        serviceDateStr = DateTime.Today.ToString("yyyy-MM-dd");
+        await LoadHistory();
+    }
+}
