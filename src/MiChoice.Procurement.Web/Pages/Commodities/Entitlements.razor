@@ -1,0 +1,298 @@
+@page "/commodities/entitlements"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+
+<PageTitle>Entitlement Tracker — miProcurement</PageTitle>
+
+<div class="page-header flex-between">
+    <div>
+        <div class="page-title">Entitlement Tracker</div>
+        <div class="page-sub">USDA commodity dollar allocations by school year</div>
+    </div>
+    <a href="/commodities" class="btn btn-sm btn-secondary">← Commodities</a>
+</div>
+
+@if (_yearEndAlert)
+{
+    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin-bottom:16px;color:#856404;">
+        <strong>Year-End Alert:</strong> School year @_currentYear ends June 30 — @_currentYearUnspent.ToString("C0") in USDA entitlement funds remain unspent. Submit orders before the deadline.
+    </div>
+}
+
+@if (!_loaded)
+{
+    <div style="padding:32px;text-align:center;color:#6b7280">Loading entitlements…</div>
+}
+else
+{
+    <!-- KPI Cards -->
+    <div class="stat-grid" style="margin-bottom:24px">
+        <div class="stat-card">
+            <div class="card-title">Total Allocated</div>
+            <div class="card-value">@_totalAllocated.ToString("C0")</div>
+            <div class="card-sub">All school years</div>
+        </div>
+        <div class="stat-card">
+            <div class="card-title">Total Used</div>
+            <div class="card-value">@_totalUsed.ToString("C0")</div>
+            <div class="card-sub">Non-cancelled orders</div>
+        </div>
+        <div class="stat-card @(_totalRemaining < 0 ? "danger" : "")">
+            <div class="card-title">Total Remaining</div>
+            <div class="card-value">@_totalRemaining.ToString("C0")</div>
+            <div class="card-sub">Unspent allocation</div>
+        </div>
+        <div class="stat-card @(_currentYearPct >= 90 ? "danger" : _currentYearPct >= 70 ? "warn" : "")">
+            <div class="card-title">@_currentYear Year Used</div>
+            <div class="card-value">@_currentYearPct.ToString("F1")%</div>
+            <div class="card-sub">Current school year</div>
+        </div>
+    </div>
+
+    <!-- Filter -->
+    <div class="filters-bar" style="margin-bottom:16px">
+        <select class="form-control" style="width:180px" @bind="_filterYear">
+            <option value="0">All Years</option>
+            @foreach (var row in _rows)
+            {
+                <option value="@row.SchoolYear">@(row.SchoolYear - 1)–@row.SchoolYear</option>
+            }
+        </select>
+        <button class="btn btn-sm btn-secondary" @onclick="ApplyFilter">Filter</button>
+        <button class="btn btn-sm btn-secondary" @onclick="ResetFilter">Reset</button>
+    </div>
+
+    <!-- Entitlements Table -->
+    <div class="card" style="padding:0">
+        <table class="mip-table">
+            <thead>
+                <tr>
+                    <th>School Year</th>
+                    <th style="text-align:right">Allocated</th>
+                    <th style="text-align:right">Used</th>
+                    <th style="text-align:right">Remaining</th>
+                    <th style="text-align:center">Usage</th>
+                    <th style="text-align:center">Orders</th>
+                    <th style="text-align:center">Risk</th>
+                    <th style="text-align:center;width:50px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _filtered)
+                {
+                    var pct      = row.TotalDollars > 0 ? (double)(row.UsedDollars / row.TotalDollars * 100m) : 0.0;
+                    var isCurr   = row.SchoolYear == _currentYear;
+                    var expanded = _expanded.Contains(row.EntitlementId);
+
+                    <tr style="@(isCurr ? "background:#f0f9ff;" : "")">
+                        <td>
+                            <span style="font-weight:500">@(row.SchoolYear - 1)–@row.SchoolYear</span>
+                            @if (isCurr)
+                            {
+                                <span class="badge badge-ok" style="margin-left:6px;font-size:11px">Current</span>
+                            }
+                        </td>
+                        <td style="text-align:right">@row.TotalDollars.ToString("C0")</td>
+                        <td style="text-align:right">@row.UsedDollars.ToString("C0")</td>
+                        <td style="text-align:right;@(row.RemainingDollars < 0 ? "color:#dc2626;font-weight:600;" : "")">
+                            @row.RemainingDollars.ToString("C0")
+                        </td>
+                        <td style="text-align:center">
+                            <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+                                <div style="width:72px;height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden">
+                                    <div style="height:100%;width:@(Math.Min(pct,100).ToString("F0"))%;background:@GetPctColor(pct);border-radius:4px"></div>
+                                </div>
+                                <span style="font-size:12px;color:#374151">@pct.ToString("F0")%</span>
+                            </div>
+                        </td>
+                        <td style="text-align:center">@row.OrderCount</td>
+                        <td style="text-align:center">
+                            @if (row.RemainingDollars < 0)
+                            {
+                                <span class="badge badge-cancelled">Over Limit</span>
+                            }
+                            else if (pct >= 95)
+                            {
+                                <span class="badge badge-cancelled">Near Limit</span>
+                            }
+                            else if (isCurr && row.RemainingDollars > 0)
+                            {
+                                <span class="badge badge-warning">Unspent</span>
+                            }
+                            else
+                            {
+                                <span style="color:#9ca3af">—</span>
+                            }
+                        </td>
+                        <td style="text-align:center">
+                            @if (row.Orders.Any())
+                            {
+                                <button class="btn btn-sm btn-secondary" @onclick="() => ToggleExpand(row.EntitlementId)"
+                                        style="padding:2px 8px;font-size:12px;min-width:32px">
+                                    @(expanded ? "▲" : "▼")
+                                </button>
+                            }
+                        </td>
+                    </tr>
+
+                    @if (expanded)
+                    {
+                        <tr>
+                            <td colspan="8" style="padding:0;background:#fafafa">
+                                <table class="mip-table" style="margin:0">
+                                    <thead style="background:#f3f4f6">
+                                        <tr>
+                                            <th style="padding-left:28px">Commodity</th>
+                                            <th style="text-align:right">Qty</th>
+                                            <th style="text-align:right">Unit Cost</th>
+                                            <th style="text-align:right">Total</th>
+                                            <th>Status</th>
+                                            <th>Ordered</th>
+                                            <th>Received</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var order in row.Orders)
+                                        {
+                                            var orderTotal   = order.QuantityOrdered * order.UnitCost;
+                                            var isCancelled  = order.Status == EntitlementOrderStatus.Cancelled;
+                                            @{
+                                                var (sbg, slabel) = order.Status switch
+                                                {
+                                                    EntitlementOrderStatus.Pending   => ("#6b7280", "Pending"),
+                                                    EntitlementOrderStatus.Ordered   => ("#2563eb", "Ordered"),
+                                                    EntitlementOrderStatus.Received  => ("#16a34a", "Received"),
+                                                    EntitlementOrderStatus.Cancelled => ("#d1d5db", "Cancelled"),
+                                                    _                                => ("#6b7280", order.Status.ToString())
+                                                };
+                                            }
+                                            <tr style="@(isCancelled ? "opacity:0.55;" : "")">
+                                                <td style="padding-left:28px">@(order.CommodityItem?.Name ?? "—")</td>
+                                                <td style="text-align:right">@order.QuantityOrdered.ToString("N2")</td>
+                                                <td style="text-align:right">@order.UnitCost.ToString("C2")</td>
+                                                <td style="text-align:right;font-weight:500">@orderTotal.ToString("C2")</td>
+                                                <td>
+                                                    <span class="badge" style="background:@sbg;color:@(isCancelled ? "#374151" : "#fff")">@slabel</span>
+                                                </td>
+                                                <td style="color:#6b7280;font-size:13px">@order.OrderedAt.LocalDateTime.ToString("MMM d, yyyy")</td>
+                                                <td style="color:#6b7280;font-size:13px">@(order.ReceivedAt.HasValue ? order.ReceivedAt.Value.LocalDateTime.ToString("MMM d, yyyy") : "—")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </td>
+                        </tr>
+                    }
+                }
+                @if (!_filtered.Any())
+                {
+                    <tr>
+                        <td colspan="8" style="text-align:center;padding:32px;color:#6b7280">
+                            No entitlements found.
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private record EntitlementRow(
+        int EntitlementId,
+        int SchoolYear,
+        decimal TotalDollars,
+        decimal UsedDollars,
+        decimal RemainingDollars,
+        int OrderCount,
+        List<EntitlementOrder> Orders
+    );
+
+    private List<EntitlementRow> _rows     = new();
+    private List<EntitlementRow> _filtered  = new();
+    private HashSet<int>         _expanded  = new();
+    private bool    _loaded             = false;
+    private int     _filterYear         = 0;
+    private int     _currentYear;
+    private bool    _yearEndAlert       = false;
+    private decimal _currentYearUnspent = 0m;
+    private double  _currentYearPct     = 0.0;
+    private decimal _totalAllocated     = 0m;
+    private decimal _totalUsed          = 0m;
+    private decimal _totalRemaining     = 0m;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentYear = GetCurrentSchoolYear();
+
+        var entitlements = await Db.Entitlements
+            .Include(e => e.EntitlementOrders)
+                .ThenInclude(eo => eo.CommodityItem)
+            .OrderByDescending(e => e.SchoolYear)
+            .ToListAsync();
+
+        _rows = entitlements.Select(e =>
+        {
+            var used = e.EntitlementOrders
+                .Where(eo => eo.Status != EntitlementOrderStatus.Cancelled)
+                .Sum(eo => eo.QuantityOrdered * eo.UnitCost);
+            return new EntitlementRow(
+                e.Id,
+                e.SchoolYear,
+                e.TotalDollars,
+                used,
+                e.TotalDollars - used,
+                e.EntitlementOrders.Count(eo => eo.Status != EntitlementOrderStatus.Cancelled),
+                e.EntitlementOrders.OrderByDescending(eo => eo.OrderedAt).ToList()
+            );
+        }).ToList();
+
+        _filtered       = _rows.ToList();
+        _totalAllocated = _rows.Sum(r => r.TotalDollars);
+        _totalUsed      = _rows.Sum(r => r.UsedDollars);
+        _totalRemaining = _rows.Sum(r => r.RemainingDollars);
+
+        var cur = _rows.FirstOrDefault(r => r.SchoolYear == _currentYear);
+        if (cur != null)
+        {
+            _currentYearPct     = cur.TotalDollars > 0
+                ? (double)(cur.UsedDollars / cur.TotalDollars * 100m)
+                : 0.0;
+            _currentYearUnspent = cur.RemainingDollars;
+            _yearEndAlert       = _currentYearUnspent > 0;
+        }
+
+        _loaded = true;
+    }
+
+    private void ApplyFilter()
+    {
+        _filtered = _filterYear == 0
+            ? _rows.ToList()
+            : _rows.Where(r => r.SchoolYear == _filterYear).ToList();
+    }
+
+    private void ResetFilter()
+    {
+        _filterYear = 0;
+        _filtered   = _rows.ToList();
+    }
+
+    private void ToggleExpand(int id)
+    {
+        if (!_expanded.Remove(id)) _expanded.Add(id);
+    }
+
+    private static int GetCurrentSchoolYear()
+    {
+        var today = DateTime.UtcNow;
+        return today.Month >= 7 ? today.Year + 1 : today.Year;
+    }
+
+    private static string GetPctColor(double pct) =>
+        pct >= 95 ? "#dc2626" : pct >= 75 ? "#d97706" : "#16a34a";
+}
+
