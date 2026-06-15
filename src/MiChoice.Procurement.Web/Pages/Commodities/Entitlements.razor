@@ -2,8 +2,10 @@
 @using MiChoice.Procurement.Infrastructure.Data
 @using MiChoice.Procurement.Domain.Entities
 @using MiChoice.Procurement.Domain.Enums
+@using MiChoice.Procurement.Infrastructure.Services
 @using Microsoft.EntityFrameworkCore
 @inject ProcurementDbContext Db
+@inject IAgenticInsightService AgenticSvc
 
 <PageTitle>Entitlement Tracker — miProcurement</PageTitle>
 
@@ -19,6 +21,14 @@
 {
     <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin-bottom:16px;color:#856404;">
         <strong>Year-End Alert:</strong> School year @_currentYear ends June 30 — @_currentYearUnspent.ToString("C0") in USDA entitlement funds remain unspent. Submit orders before the deadline.
+    </div>
+}
+
+@if (_entitlementInsight != null)
+{
+    <div class="agentic-panel" style="margin-bottom:16px">
+        <div class="ap-label">&#9889; miAgentic &#8212; Entitlement Advisory</div>
+        <div class="ap-insight">@_entitlementInsight.Insight</div>
     </div>
 }
 
@@ -223,6 +233,7 @@ else
     private decimal _totalAllocated     = 0m;
     private decimal _totalUsed          = 0m;
     private decimal _totalRemaining     = 0m;
+    private AgenticInsight?  _entitlementInsight;
 
     protected override async Task OnInitializedAsync()
     {
@@ -266,6 +277,7 @@ else
         }
 
         _loaded = true;
+        _entitlementInsight = await AgenticSvc.GetEntitlementInsightAsync(_currentYear);
     }
 
     private void ApplyFilter()
@@ -295,4 +307,3 @@ else
     private static string GetPctColor(double pct) =>
         pct >= 95 ? "#dc2626" : pct >= 75 ? "#d97706" : "#16a34a";
 }
-
