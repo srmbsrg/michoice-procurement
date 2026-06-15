@@ -1,0 +1,344 @@
+@page "/inventory/transfers"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService AgenticSvc
+
+<PageTitle>Inventory Transfers — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Inventory Transfers</div>
+        <div class="page-sub">Campus-to-campus stock movement</div>
+    </div>
+    <button class="btn btn-primary" @onclick="ToggleForm">
+        @(_showForm ? "Cancel" : "+ New Transfer")
+    </button>
+</div>
+
+@if (transferInsight != null)
+{
+    <div class="agentic-panel" style="margin-bottom:24px">
+        <div class="ap-label">&#9889; miAgentic &#8212; Transfer Recommendation</div>
+        <div class="ap-insight">@transferInsight.Insight</div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="card" style="margin-bottom:24px">
+        <h2>New Transfer Order</h2>
+        @if (!string.IsNullOrEmpty(formError))
+        {
+            <div style="color:#ef4444;margin-bottom:12px;padding:10px 14px;background:#fef2f2;border-radius:6px;font-size:0.9rem">@formError</div>
+        }
+
+        <div class="two-col">
+            <div class="form-group">
+                <label class="form-label">From Campus *</label>
+                <select class="form-control" @bind="newOrder.FromCampusId">
+                    <option value="0">&#8212; Select campus &#8212;</option>
+                    @foreach (var c in campuses)
+                    {
+                        <option value="@c.Id">@c.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">To Campus *</label>
+                <select class="form-control" @bind="newOrder.ToCampusId">
+                    <option value="0">&#8212; Select campus &#8212;</option>
+                    @foreach (var c in campuses)
+                    {
+                        <option value="@c.Id">@c.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <div class="two-col">
+            <div class="form-group">
+                <label class="form-label">Transfer Date *</label>
+                <input type="date" class="form-control" @bind="orderDateStr" />
+            </div>
+            <div class="form-group">
+                <label class="form-label">Expected Delivery</label>
+                <input type="date" class="form-control" @bind="deliveryDateStr" />
+            </div>
+        </div>
+
+        <h3 style="margin:0 0 10px">Line Items</h3>
+        @for (int i = 0; i < transferLines.Count; i++)
+        {
+            var idx = i;
+            var line = transferLines[idx];
+            <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+                <select class="form-control" style="flex:3" @bind="line.InventoryItemId">
+                    <option value="0">&#8212; Select item &#8212;</option>
+                    @foreach (var item in inventoryItems)
+                    {
+                        <option value="@item.Id">@item.Name (@item.UnitOfMeasure)</option>
+                    }
+                </select>
+                <input type="number" class="form-control" style="width:90px" min="0.01" step="0.01"
+                       placeholder="Qty" @bind="line.Quantity" />
+                <input class="form-control" style="width:70px" placeholder="Unit"
+                       @bind="line.Unit" maxlength="10" />
+                <button class="btn btn-secondary" style="padding:6px 10px"
+                        @onclick="() => transferLines.RemoveAt(idx)"
+                        disabled="@(transferLines.Count <= 1)">&#215;</button>
+            </div>
+        }
+        <button class="btn btn-secondary" style="margin-bottom:16px" @onclick="AddLine">+ Add Item</button>
+
+        <div class="form-group">
+            <label class="form-label">Notes</label>
+            <textarea class="form-control" rows="2" @bind="newOrder.Notes"></textarea>
+        </div>
+
+        <button class="btn btn-primary" @onclick="SaveTransferAsync" disabled="@saving">
+            @(saving ? "Saving&#x2026;" : "Create Transfer")
+        </button>
+    </div>
+}
+
+<div class="card" style="padding:0">
+    <div class="filters-bar" style="padding:16px 20px;margin:0;border-bottom:1px solid #f1f3f5">
+        <select class="form-control" style="width:160px" @onchange="OnStatusFilter">
+            <option value="">All Statuses</option>
+            @foreach (var s in Enum.GetValues<TransferOrderStatus>())
+            {
+                <option value="@s">@s</option>
+            }
+        </select>
+    </div>
+
+    @if (!string.IsNullOrEmpty(actionMsg))
+    {
+        <div style="background:#f0fdf4;color:#166534;margin:12px 16px;padding:10px 14px;border-radius:6px;font-size:0.9rem">@actionMsg</div>
+    }
+
+    <table class="mip-table">
+        <thead>
+            <tr>
+                <th>TO #</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Date</th>
+                <th>Expected</th>
+                <th>Items</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!filtered.Any())
+            {
+                <tr>
+                    <td colspan="8" style="text-align:center;padding:24px;color:#9ca3af">
+                        No transfer orders found.
+                    </td>
+                </tr>
+            }
+            @foreach (var to in filtered)
+            {
+                <tr>
+                    <td style="font-weight:600">TO-@to.Id.ToString("D4")</td>
+                    <td>@(to.FromCampus?.Name ?? "&#8212;")</td>
+                    <td>@(to.ToCampus?.Name ?? "&#8212;")</td>
+                    <td>@to.OrderDate.ToString("MMM d, yyyy")</td>
+                    <td style="color:#6b7280">@(to.ExpectedDelivery.HasValue ? to.ExpectedDelivery.Value.ToString("MMM d, yyyy") : "&#8212;")</td>
+                    <td>@to.Lines.Count</td>
+                    <td>
+                        <span class="badge badge-@to.Status.ToString().ToLower()">@to.Status</span>
+                    </td>
+                    <td style="text-align:right;white-space:nowrap">
+                        @if (to.Status == TransferOrderStatus.Draft)
+                        {
+                            <button class="btn btn-secondary" style="font-size:12px;padding:4px 10px"
+                                    @onclick="() => ShipAsync(to.Id)">
+                                &#x2708; Ship
+                            </button>
+                        }
+                        @if (to.Status == TransferOrderStatus.InTransit)
+                        {
+                            <button class="btn btn-primary" style="font-size:12px;padding:4px 10px"
+                                    @onclick="() => ReceiveAsync(to.Id)">
+                                &#x2713; Receive
+                            </button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<Campus>         campuses       = new();
+    private List<InventoryItem>  inventoryItems = new();
+    private List<TransferOrder>  all            = new();
+    private List<TransferOrder>  filtered       = new();
+
+    private AgenticInsight? transferInsight;
+    private bool _showForm;
+    private string formError  = "";
+    private string actionMsg  = "";
+    private bool   saving;
+
+    private TransferOrder          newOrder = new() { OrderDate = DateOnly.FromDateTime(DateTime.Today) };
+    private string                 orderDateStr    = DateTime.Today.ToString("yyyy-MM-dd");
+    private string                 deliveryDateStr = "";
+    private List<TransferLineInput> transferLines  = new() { new() };
+
+    private TransferOrderStatus? statusFilter;
+
+    protected override async Task OnInitializedAsync()
+    {
+        campuses       = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+        inventoryItems = await Db.InventoryItems.Where(i => i.IsActive).OrderBy(i => i.Name).ToListAsync();
+        await LoadAsync();
+        transferInsight = await AgenticSvc.GetTransferInsightAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        all = await Db.TransferOrders
+            .Include(t => t.FromCampus)
+            .Include(t => t.ToCampus)
+            .Include(t => t.Lines)
+            .OrderByDescending(t => t.CreatedAt)
+            .ToListAsync();
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        filtered = statusFilter.HasValue
+            ? all.Where(t => t.Status == statusFilter.Value).ToList()
+            : all;
+    }
+
+    private void OnStatusFilter(ChangeEventArgs e)
+    {
+        statusFilter = Enum.TryParse<TransferOrderStatus>(e.Value?.ToString(), out var s) ? s : null;
+        ApplyFilter();
+    }
+
+    private void ToggleForm()
+    {
+        _showForm = !_showForm;
+        if (!_showForm) ResetForm();
+    }
+
+    private void ResetForm()
+    {
+        newOrder        = new() { OrderDate = DateOnly.FromDateTime(DateTime.Today) };
+        orderDateStr    = DateTime.Today.ToString("yyyy-MM-dd");
+        deliveryDateStr = "";
+        transferLines   = new() { new() };
+        formError       = "";
+    }
+
+    private void AddLine() => transferLines.Add(new());
+
+    private async Task SaveTransferAsync()
+    {
+        formError = "";
+        if (newOrder.FromCampusId == 0 || newOrder.ToCampusId == 0)
+        { formError = "Please select both campuses."; return; }
+        if (newOrder.FromCampusId == newOrder.ToCampusId)
+        { formError = "From and To campuses must be different."; return; }
+
+        var valid = transferLines.Where(l => l.InventoryItemId > 0 && l.Quantity > 0).ToList();
+        if (!valid.Any()) { formError = "Add at least one valid line item (item + quantity > 0)."; return; }
+
+        saving          = true;
+        newOrder.OrderDate         = DateOnly.TryParse(orderDateStr,    out var od) ? od : DateOnly.FromDateTime(DateTime.Today);
+        newOrder.ExpectedDelivery  = DateOnly.TryParse(deliveryDateStr, out var dd) ? dd : null;
+        newOrder.Status            = TransferOrderStatus.Draft;
+        newOrder.Lines             = valid.Select(l => new TransferOrderLine
+        {
+            InventoryItemId   = l.InventoryItemId,
+            QuantityRequested = l.Quantity,
+            QuantityShipped   = 0,
+            QuantityReceived  = 0,
+            Unit              = l.Unit
+        }).ToList();
+
+        Db.TransferOrders.Add(newOrder);
+        await Db.SaveChangesAsync();
+
+        var newId = newOrder.Id;
+        saving    = false;
+        _showForm = false;
+        ResetForm();
+        actionMsg = $"Transfer TO-{newId:D4} created (Draft).";
+        await LoadAsync();
+    }
+
+    private async Task ShipAsync(int id)
+    {
+        var to = await Db.TransferOrders
+            .Include(t => t.Lines)
+            .FirstOrDefaultAsync(t => t.Id == id);
+        if (to == null) return;
+
+        foreach (var line in to.Lines.Where(l => l.InventoryItemId > 0))
+        {
+            var stock = await Db.InventoryStocks
+                .FirstOrDefaultAsync(s => s.InventoryItemId == line.InventoryItemId && s.CampusId == to.FromCampusId);
+            if (stock == null)
+            {
+                stock = new InventoryStock { InventoryItemId = line.InventoryItemId, CampusId = to.FromCampusId, CurrentStock = 0 };
+                Db.InventoryStocks.Add(stock);
+            }
+            line.QuantityShipped  = line.QuantityRequested;
+            stock.CurrentStock   -= line.QuantityRequested;
+            stock.LastUpdated     = DateTimeOffset.UtcNow;
+        }
+
+        to.Status = TransferOrderStatus.InTransit;
+        await Db.SaveChangesAsync();
+        actionMsg = $"TO-{id:D4} shipped. Stock deducted from sending campus.";
+        await LoadAsync();
+    }
+
+    private async Task ReceiveAsync(int id)
+    {
+        var to = await Db.TransferOrders
+            .Include(t => t.Lines)
+            .FirstOrDefaultAsync(t => t.Id == id);
+        if (to == null) return;
+
+        foreach (var line in to.Lines.Where(l => l.InventoryItemId > 0))
+        {
+            line.QuantityReceived = line.QuantityShipped;
+
+            var stock = await Db.InventoryStocks
+                .FirstOrDefaultAsync(s => s.InventoryItemId == line.InventoryItemId && s.CampusId == to.ToCampusId);
+            if (stock == null)
+            {
+                stock = new InventoryStock { InventoryItemId = line.InventoryItemId, CampusId = to.ToCampusId, CurrentStock = 0 };
+                Db.InventoryStocks.Add(stock);
+            }
+            stock.CurrentStock  += line.QuantityReceived;
+            stock.LastUpdated    = DateTimeOffset.UtcNow;
+        }
+
+        to.Status = TransferOrderStatus.Received;
+        await Db.SaveChangesAsync();
+        actionMsg = $"TO-{id:D4} received. Stock updated at destination campus.";
+        await LoadAsync();
+    }
+
+    private sealed class TransferLineInput
+    {
+        public int     InventoryItemId { get; set; }
+        public decimal Quantity        { get; set; } = 1;
+        public string  Unit            { get; set; } = "CS";
+    }
+}
