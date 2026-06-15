@@ -1,8 +1,10 @@
 @page "/admin/vendors"
 @using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
 @using MiChoice.Procurement.Domain.Entities
 @using Microsoft.EntityFrameworkCore
 @inject ProcurementDbContext Db
+@inject IAgenticInsightService InsightSvc
 
 <PageTitle>Vendors — miProcurement</PageTitle>
 
@@ -14,6 +16,42 @@
     <button class="btn btn-primary" @onclick="() => showAdd = !showAdd">+ Add Vendor</button>
 </div>
 
+@* KPI Cards *@
+<div class="mip-kpi-row">
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@vendors.Count</div>
+        <div class="mip-kpi-label">Total Vendors</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@vendors.Count(v => v.IsActive)</div>
+        <div class="mip-kpi-label">Active</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@vendors.Count(v => v.IsUsdaCommoditySupplier)</div>
+        <div class="mip-kpi-label">USDA Suppliers</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@vendors.Count(v => !v.IsActive)</div>
+        <div class="mip-kpi-label">Inactive</div>
+    </div>
+</div>
+
+@* miAgentic Panel *@
+@if (_insightLoading)
+{
+    <div class="card" style="border-left:4px solid #0ea5e9;margin-bottom:16px;color:var(--text-muted);font-size:0.875rem">
+        ✦ miAgentic — Analyzing vendor roster…
+    </div>
+}
+else if (_vendorInsight != null)
+{
+    <div class="card" style="border-left:4px solid #0ea5e9;margin-bottom:16px">
+        <div style="font-size:0.75rem;font-weight:700;color:#0ea5e9;letter-spacing:0.05em;margin-bottom:6px">✦ miAgentic — Vendor Intelligence</div>
+        <div style="font-size:0.875rem;color:var(--text-muted)">@_vendorInsight</div>
+    </div>
+}
+
+@* Add Vendor Form *@
 @if (showAdd)
 {
     <div class="card" style="margin-bottom:20px">
@@ -55,6 +93,16 @@
     </div>
 }
 
+@* Filters *@
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+    <input class="form-control" style="max-width:280px"
+           placeholder="Search by name…" @bind="_search" @bind:event="oninput" />
+    <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:0.875rem;cursor:pointer">
+        <input type="checkbox" @bind="_activeOnly" /> Active only
+    </label>
+    <span style="font-size:0.8rem;color:var(--text-muted)">@Filtered.Count() result@(Filtered.Count() == 1 ? "" : "s")</span>
+</div>
+
 <div class="card" style="padding:0">
     <table class="mip-table">
         <thead>
@@ -70,29 +118,67 @@
             </tr>
         </thead>
         <tbody>
-            @foreach (var v in vendors)
+            @foreach (var v in Filtered)
             {
-                <tr style="@(v.IsActive ? "" : "opacity:0.55")">
-                    <td style="font-weight:500">@v.Name</td>
-                    <td>@(v.ContactName ?? "—")</td>
-                    <td>@(v.Phone ?? "—")</td>
-                    <td>@(v.Email != null ? v.Email : "—")</td>
-                    <td>@(v.AccountNumber ?? "—")</td>
-                    <td>
-                        @if (v.IsUsdaCommoditySupplier)
-                        { <span class="badge badge-received">USDA</span> }
-                        else
-                        { <span class="badge badge-draft">—</span> }
-                    </td>
-                    <td>
-                        <span class="badge @(v.IsActive ? "badge-received" : "badge-cancelled")">
-                            @(v.IsActive ? "Active" : "Inactive")
-                        </span>
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-secondary" @onclick="() => ToggleActive(v)">
-                            @(v.IsActive ? "Deactivate" : "Activate")
-                        </button>
+                @if (_editId == v.Id)
+                {
+                    <tr style="background:var(--surface-hover,#f0f9ff)">
+                        <td><input class="form-control form-control-sm" @bind="_edit!.Name" /></td>
+                        <td><input class="form-control form-control-sm" @bind="_edit.ContactName" /></td>
+                        <td><input class="form-control form-control-sm" @bind="_edit.Phone" /></td>
+                        <td><input class="form-control form-control-sm" @bind="_edit.Email" /></td>
+                        <td><input class="form-control form-control-sm" @bind="_edit.AccountNumber" /></td>
+                        <td style="text-align:center">
+                            <input type="checkbox" @bind="_edit.IsUsdaCommoditySupplier" title="USDA Commodity Supplier" />
+                        </td>
+                        <td>
+                            <span class="badge @(v.IsActive ? "badge-received" : "badge-cancelled")">
+                                @(v.IsActive ? "Active" : "Inactive")
+                            </span>
+                        </td>
+                        <td style="white-space:nowrap">
+                            <button class="btn btn-sm btn-primary" @onclick="() => CommitEdit(v)">Save</button>
+                            <button class="btn btn-sm btn-secondary" @onclick="CancelEdit">Cancel</button>
+                        </td>
+                    </tr>
+                }
+                else
+                {
+                    <tr style="@(v.IsActive ? "" : "opacity:0.55")">
+                        <td style="font-weight:500">@v.Name</td>
+                        <td>@(v.ContactName ?? "—")</td>
+                        <td>@(v.Phone ?? "—")</td>
+                        <td>@(v.Email ?? "—")</td>
+                        <td>@(v.AccountNumber ?? "—")</td>
+                        <td>
+                            @if (v.IsUsdaCommoditySupplier)
+                            {
+                                <span class="badge badge-received">USDA</span>
+                            }
+                            else
+                            {
+                                <span style="color:var(--text-muted)">—</span>
+                            }
+                        </td>
+                        <td>
+                            <span class="badge @(v.IsActive ? "badge-received" : "badge-cancelled")">
+                                @(v.IsActive ? "Active" : "Inactive")
+                            </span>
+                        </td>
+                        <td style="white-space:nowrap">
+                            <button class="btn btn-sm btn-secondary" @onclick="() => StartEdit(v)">Edit</button>
+                            <button class="btn btn-sm btn-secondary" @onclick="() => ToggleActive(v)">
+                                @(v.IsActive ? "Deactivate" : "Activate")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            }
+            @if (!Filtered.Any())
+            {
+                <tr>
+                    <td colspan="8" style="text-align:center;color:var(--text-muted);padding:28px">
+                        No vendors match your filter.
                     </td>
                 </tr>
             }
@@ -105,10 +191,38 @@
     private Vendor newVendor = new() { IsActive = true };
     private bool showAdd;
     private string addMsg = "";
+    private string _search = "";
+    private bool _activeOnly;
+    private string? _vendorInsight;
+    private bool _insightLoading;
+
+    // Inline edit state
+    private int? _editId;
+    private Vendor? _edit;
+
+    private IEnumerable<Vendor> Filtered => vendors
+        .Where(v => (!_activeOnly || v.IsActive)
+                 && (string.IsNullOrWhiteSpace(_search)
+                     || v.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)));
 
     protected override async Task OnInitializedAsync()
     {
         vendors = await Db.Vendors.OrderBy(v => v.Name).ToListAsync();
+        StateHasChanged();
+        _ = LoadInsightAsync();
+    }
+
+    private async Task LoadInsightAsync()
+    {
+        _insightLoading = true;
+        StateHasChanged();
+        var result = await InsightSvc.GetVendorInsightAsync(
+            vendors.Count,
+            vendors.Count(v => v.IsActive),
+            vendors.Count(v => v.IsUsdaCommoditySupplier));
+        _vendorInsight = result?.Insight;
+        _insightLoading = false;
+        StateHasChanged();
     }
 
     private async Task SaveVendor()
@@ -127,4 +241,35 @@
         v.IsActive = !v.IsActive;
         await Db.SaveChangesAsync();
     }
+
+    private void StartEdit(Vendor v)
+    {
+        _editId = v.Id;
+        _edit = new Vendor
+        {
+            Id = v.Id,
+            Name = v.Name,
+            ContactName = v.ContactName,
+            Phone = v.Phone,
+            Email = v.Email,
+            AccountNumber = v.AccountNumber,
+            IsUsdaCommoditySupplier = v.IsUsdaCommoditySupplier,
+            IsActive = v.IsActive,
+        };
+    }
+
+    private async Task CommitEdit(Vendor orig)
+    {
+        if (_edit == null || string.IsNullOrWhiteSpace(_edit.Name)) return;
+        orig.Name = _edit.Name;
+        orig.ContactName = _edit.ContactName;
+        orig.Phone = _edit.Phone;
+        orig.Email = _edit.Email;
+        orig.AccountNumber = _edit.AccountNumber;
+        orig.IsUsdaCommoditySupplier = _edit.IsUsdaCommoditySupplier;
+        await Db.SaveChangesAsync();
+        CancelEdit();
+    }
+
+    private void CancelEdit() { _editId = null; _edit = null; }
 }

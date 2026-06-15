@@ -9,6 +9,7 @@ public interface IAgenticInsightService
     Task<AgenticInsight?> GetWasteInsightAsync(int campusId, DateOnly week, CancellationToken ct = default);
     Task<AgenticInsight?> GetReorderInsightAsync(int campusId, CancellationToken ct = default);
     Task<AgenticInsight?> GetTransferInsightAsync(CancellationToken ct = default);
+    Task<AgenticInsight?> GetVendorInsightAsync(int total, int active, int usdaCount, CancellationToken ct = default);
 }
 
 public class StubAgenticInsightService : IAgenticInsightService
@@ -55,4 +56,26 @@ public class StubAgenticInsightService : IAgenticInsightService
         return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "Transfer", DateTimeOffset.UtcNow));
     }
 
+    public Task<AgenticInsight?> GetVendorInsightAsync(int total, int active, int usdaCount, CancellationToken ct = default)
+    {
+        var inactive = total - active;
+        string insight;
+        if (total == 0)
+        {
+            insight = "No vendors on file yet. Add your first supplier to start tracking procurement relationships and build purchasing history.";
+        }
+        else
+        {
+            var parts = new System.Text.StringBuilder();
+            parts.Append($"You have {active} active vendor{(active == 1 ? "" : "s")}");
+            if (usdaCount > 0)
+                parts.Append($" including {usdaCount} USDA commodity supplier{(usdaCount == 1 ? "" : "s")}");
+            parts.Append(". ");
+            if (inactive > 0)
+                parts.Append($"{inactive} vendor{(inactive == 1 ? " is" : "s are")} inactive — review quarterly to remove stale records. ");
+            parts.Append("Consolidating to fewer primary suppliers typically improves pricing leverage and simplifies receiving logistics.");
+            insight = parts.ToString();
+        }
+        return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "Vendor", DateTimeOffset.UtcNow));
+    }
 }
