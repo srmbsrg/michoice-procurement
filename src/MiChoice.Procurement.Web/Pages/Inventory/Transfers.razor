@@ -62,11 +62,11 @@
         <div class="two-col">
             <div class="form-group">
                 <label class="form-label">Transfer Date *</label>
-                <input type="date" class="form-control" @bind="orderDateStr" />
+                <input type="date" class="form-control" value="@orderDateStr" @oninput="e => orderDateStr = e.Value?.ToString() ?? string.Empty" />
             </div>
             <div class="form-group">
                 <label class="form-label">Expected Delivery</label>
-                <input type="date" class="form-control" @bind="deliveryDateStr" />
+                <input type="date" class="form-control" value="@deliveryDateStr" @oninput="e => deliveryDateStr = e.Value?.ToString() ?? string.Empty" />
             </div>
         </div>
 
