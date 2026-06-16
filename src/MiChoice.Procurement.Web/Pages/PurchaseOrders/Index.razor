@@ -1,9 +1,11 @@
 @page "/purchase-orders"
 @using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
 @using MiChoice.Procurement.Domain.Enums
 @using Microsoft.EntityFrameworkCore
 @inject ProcurementDbContext Db
 @inject NavigationManager Nav
+@inject IAgenticInsightService InsightSvc
 
 <PageTitle>Purchase Orders — miProcurement</PageTitle>
 
@@ -14,6 +16,45 @@
     </div>
     <a href="/purchase-orders/new" class="btn btn-primary">+ New PO</a>
 </div>
+
+@* KPI Cards *@
+<div class="mip-kpi-row">
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@_totalPos</div>
+        <div class="mip-kpi-label">Total POs</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@_draftCount</div>
+        <div class="mip-kpi-label">Draft</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@_submittedCount</div>
+        <div class="mip-kpi-label">Submitted</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">@_receivedCount</div>
+        <div class="mip-kpi-label">Received</div>
+    </div>
+    <div class="mip-kpi-card">
+        <div class="mip-kpi-value">$@_totalValue.ToString("N0")</div>
+        <div class="mip-kpi-label">Total Value</div>
+    </div>
+</div>
+
+@* miAgentic Panel *@
+@if (_insightLoading)
+{
+    <div class="card" style="border-left:4px solid #0ea5e9;margin-bottom:16px;color:var(--text-muted);font-size:0.875rem">
+        ✦ miAgentic — Analyzing procurement activity…
+    </div>
+}
+else if (_poInsight != null)
+{
+    <div class="card" style="border-left:4px solid #0ea5e9;margin-bottom:16px">
+        <div style="font-size:0.75rem;font-weight:700;color:#0ea5e9;letter-spacing:0.05em;margin-bottom:6px">✦ miAgentic — Procurement Intelligence</div>
+        <div style="font-size:0.875rem;color:var(--text-muted)">@_poInsight</div>
+    </div>
+}
 
 <div class="card" style="padding:0">
     <div class="filters-bar" style="padding:16px 20px;margin:0;border-bottom:1px solid #f1f3f5">
@@ -76,10 +117,42 @@
     private int campusFilter;
     private string search = "";
 
+    // KPI totals — always unfiltered
+    private int _totalPos, _draftCount, _submittedCount, _receivedCount;
+    private decimal _totalValue;
+
+    // miAgentic
+    private string? _poInsight;
+    private bool _insightLoading;
+
     protected override async Task OnInitializedAsync()
     {
         campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
         await LoadOrders();
+        await LoadKpisAsync();
+        StateHasChanged();
+        _ = LoadInsightAsync();
+    }
+
+    private async Task LoadKpisAsync()
+    {
+        var all = await Db.PurchaseOrders.Include(p => p.Lines).ToListAsync();
+        _totalPos      = all.Count;
+        _draftCount    = all.Count(p => p.Status == PurchaseOrderStatus.Draft);
+        _submittedCount = all.Count(p => p.Status == PurchaseOrderStatus.Submitted);
+        _receivedCount  = all.Count(p => p.Status == PurchaseOrderStatus.Received);
+        _totalValue     = all.Sum(p => p.Lines.Sum(l => l.LineTotal));
+    }
+
+    private async Task LoadInsightAsync()
+    {
+        _insightLoading = true;
+        StateHasChanged();
+        var result = await InsightSvc.GetPurchaseOrderInsightAsync(
+            _totalPos, _draftCount, _submittedCount, _receivedCount, _totalValue);
+        _poInsight = result?.Insight;
+        _insightLoading = false;
+        StateHasChanged();
     }
 
     private void OnStatusFilter(ChangeEventArgs e)
@@ -109,7 +182,7 @@
             .AsQueryable();
 
         if (statusFilter.HasValue) q = q.Where(p => p.Status == statusFilter.Value);
-        if (campusFilter > 0) q = q.Where(p => p.CampusId == campusFilter);
+        if (campusFilter > 0)      q = q.Where(p => p.CampusId == campusFilter);
         if (!string.IsNullOrWhiteSpace(search))
             q = q.Where(p => p.Vendor!.Name.Contains(search));
 

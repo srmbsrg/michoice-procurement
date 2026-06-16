@@ -10,6 +10,7 @@ public interface IAgenticInsightService
     Task<AgenticInsight?> GetReorderInsightAsync(int campusId, CancellationToken ct = default);
     Task<AgenticInsight?> GetTransferInsightAsync(CancellationToken ct = default);
     Task<AgenticInsight?> GetVendorInsightAsync(int total, int active, int usdaCount, CancellationToken ct = default);
+    Task<AgenticInsight?> GetPurchaseOrderInsightAsync(int total, int draft, int submitted, int received, decimal totalValue, CancellationToken ct = default);
 }
 
 public class StubAgenticInsightService : IAgenticInsightService
@@ -77,5 +78,35 @@ public class StubAgenticInsightService : IAgenticInsightService
             insight = parts.ToString();
         }
         return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "Vendor", DateTimeOffset.UtcNow));
+    }
+
+    public Task<AgenticInsight?> GetPurchaseOrderInsightAsync(int total, int draft, int submitted, int received, decimal totalValue, CancellationToken ct = default)
+    {
+        string insight;
+        if (total == 0)
+        {
+            insight = "No purchase orders on file yet. Create your first PO to begin tracking vendor orders and building procurement history.";
+        }
+        else if (submitted > 0 && draft > 0)
+        {
+            insight = $"{submitted} PO{(submitted == 1 ? "" : "s")} currently submitted to vendors and {draft} draft{(draft == 1 ? "" : "s")} awaiting final submission. " +
+                      $"Total portfolio value: ${totalValue:N0}. Submit pending drafts to maintain order timelines and avoid supply gaps.";
+        }
+        else if (submitted > 0)
+        {
+            insight = $"{submitted} PO{(submitted == 1 ? "" : "s")} submitted to vendors totaling ${totalValue:N0} across {total} order{(total == 1 ? "" : "s")}. " +
+                      "Follow up with vendors on any orders approaching or past expected delivery dates to keep receiving on schedule.";
+        }
+        else if (draft > 0)
+        {
+            insight = $"{draft} draft PO{(draft == 1 ? "" : "s")} awaiting submission. Total portfolio: ${totalValue:N0} across {total} order{(total == 1 ? "" : "s")}. " +
+                      "Submit drafts promptly to avoid procurement delays and ensure timely delivery.";
+        }
+        else
+        {
+            insight = $"All {received} order{(received == 1 ? "" : "s")} received — no open procurement actions. " +
+                      $"Historical spend: ${totalValue:N0}. Review vendor performance before the next ordering cycle to identify consolidation opportunities.";
+        }
+        return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "PurchaseOrder", DateTimeOffset.UtcNow));
     }
 }
