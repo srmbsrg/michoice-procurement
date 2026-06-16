@@ -107,6 +107,7 @@ else
                                    urgency == "Critical"     ? "#f59e0b" : "#eab308";
                     var rowBg    = urgency == "Out of Stock" ? "#1a0000" :
                                    urgency == "Critical"     ? "#1a1000" : "#111100";
+                    var urgColor20 = urgColor + "33";
                     <tr style="background:@rowBg">
                         <td style="font-weight:500">@s.InventoryItem.Name</td>
                         <td>@(s.InventoryItem.Category ?? "—")</td>
