@@ -168,6 +168,28 @@ public class AnthropicProcurementInsightService : IAgenticInsightService
         catch { return await _stub.GetLowStockInsightAsync(lowStockItems, outOfStock, campusCount, totalItems, topUrgent, ct); }
     }
 
+    public async Task<AgenticInsight?> GetReceivingDiscrepancyInsightAsync(
+        int totalPos, int discrepancyPos, decimal orderedValue, decimal receivedValue,
+        string topDiscrepancies, CancellationToken ct = default)
+    {
+        try
+        {
+            var variancePct = orderedValue > 0 ? (orderedValue - receivedValue) * 100m / orderedValue : 0m;
+            var prompt =
+                $"Receiving discrepancy analysis for K-12 school food service: " +
+                $"{discrepancyPos} of {totalPos} received POs have short shipments. " +
+                $"Total ordered: ${orderedValue:N0}. Total received: ${receivedValue:N0}. " +
+                $"Variance: ${orderedValue - receivedValue:N0} ({variancePct:F1}%). " +
+                (string.IsNullOrWhiteSpace(topDiscrepancies) ? "" : $"Primary discrepancy sources: {topDiscrepancies}. ") +
+                "Provide a 1-2 sentence assessment of vendor fulfillment reliability and one specific " +
+                "action recommendation for a K-12 food service procurement manager " +
+                "(e.g., vendor follow-up, receiving checklist update, or order adjustment strategy).";
+            var text = await CallAsync(prompt, ct);
+            return new AgenticInsight(text, "ReceivingDiscrepancy", DateTimeOffset.UtcNow);
+        }
+        catch { return await _stub.GetReceivingDiscrepancyInsightAsync(totalPos, discrepancyPos, orderedValue, receivedValue, topDiscrepancies, ct); }
+    }
+
     // ── Anthropic API helper ──────────────────────────────────────────────────
 
     private async Task<string> CallAsync(string userPrompt, CancellationToken ct)

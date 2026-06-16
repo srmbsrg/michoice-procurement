@@ -14,6 +14,11 @@ public interface IAgenticInsightService
         Task<AgenticInsight?> GetLowStockInsightAsync(
         int lowStockItems, int outOfStock, int campusCount, int totalItems,
         string topUrgent, CancellationToken ct = default);
+
+    /// <summary>Receiving discrepancy insight — vendor reliability and short-shipment pattern analysis.</summary>
+    Task<AgenticInsight?> GetReceivingDiscrepancyInsightAsync(
+        int totalPos, int discrepancyPos, decimal orderedValue, decimal receivedValue,
+        string topDiscrepancies, CancellationToken ct = default);
 }
 
 public class StubAgenticInsightService : IAgenticInsightService
@@ -144,6 +149,41 @@ public class StubAgenticInsightService : IAgenticInsightService
         }
 
         return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "LowStock", DateTimeOffset.UtcNow));
+    }
+
+    public Task<AgenticInsight?> GetReceivingDiscrepancyInsightAsync(
+        int totalPos, int discrepancyPos, decimal orderedValue, decimal receivedValue,
+        string topDiscrepancies, CancellationToken ct = default)
+    {
+        string insight;
+        var variancePct = orderedValue > 0 ? (orderedValue - receivedValue) * 100m / orderedValue : 0m;
+
+        if (discrepancyPos == 0)
+        {
+            insight = $"All {totalPos} received order{(totalPos == 1 ? "" : "s")} match PO quantities. " +
+                      "Vendor fulfillment is on track — no receiving discrepancies to report.";
+        }
+        else if (discrepancyPos >= 5 || variancePct >= 20m)
+        {
+            insight = $"Significant receiving gap: {discrepancyPos} of {totalPos} received PO{(totalPos == 1 ? "" : "s")} have short shipments. " +
+                      $"Ordered ${orderedValue:N0} — received ${receivedValue:N0} ({variancePct:F1}% variance). " +
+                      (string.IsNullOrWhiteSpace(topDiscrepancies) ? "" : $"Primary vendors: {topDiscrepancies}. ") +
+                      "Contact vendors to reconcile discrepancies and review receiving procedures before the next order cycle.";
+        }
+        else if (discrepancyPos >= 2)
+        {
+            insight = $"{discrepancyPos} PO{(discrepancyPos == 1 ? "" : "s")} have line-item discrepancies (${orderedValue - receivedValue:N0} under-received). " +
+                      (string.IsNullOrWhiteSpace(topDiscrepancies) ? "" : $"Affected: {topDiscrepancies}. ") +
+                      "Spot-check receiving records and follow up with the vendor on short-shipped items.";
+        }
+        else
+        {
+            insight = $"Minor discrepancy on {discrepancyPos} PO — ${orderedValue - receivedValue:N0} variance against ${orderedValue:N0} ordered. " +
+                      (string.IsNullOrWhiteSpace(topDiscrepancies) ? "" : $"Item: {topDiscrepancies}. ") +
+                      "Note the variance in vendor performance records and confirm resolution on the next delivery.";
+        }
+
+        return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "ReceivingDiscrepancy", DateTimeOffset.UtcNow));
     }
 }
 

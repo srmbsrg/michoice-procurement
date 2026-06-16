@@ -1,0 +1,305 @@
+@page "/purchase-orders/discrepancies"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@using System.Text
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService InsightSvc
+@inject IJSRuntime JS
+
+<PageTitle>Receiving Discrepancies — miProcurement</PageTitle>
+
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+    <div>
+        <div class="page-title">Receiving Discrepancies</div>
+        <div class="page-sub">Received purchase orders with short shipments or quantity mismatches</div>
+    </div>
+    @if (_poRows.Any())
+    {
+        <button class="btn btn-secondary" disabled="@_exporting" @onclick="ExportCsvAsync">
+            @(_exporting ? "Exporting…" : "Export CSV")
+        </button>
+    }
+</div>
+
+<div class="card" style="padding:14px 20px;margin-bottom:18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <label style="font-size:0.875rem;color:var(--muted);">Campus</label>
+    <select class="select-input" style="min-width:140px;" @bind="_campusFilter" @bind:after="LoadAsync">
+        <option value="0">All Campuses</option>
+        @foreach (var c in _campuses)
+        {
+            <option value="@c.Id">@c.Name</option>
+        }
+    </select>
+    <span style="font-size:0.8rem;color:var(--muted);">
+        @_totalPos received PO@(_totalPos == 1 ? "" : "s") checked@(_campusFilter > 0 ? $" on Campus {_campusFilter}" : " across all campuses")
+    </span>
+</div>
+
+@if (_loading)
+{
+    <div style="text-align:center;padding:40px 0;color:var(--muted);">Loading discrepancy report…</div>
+}
+else if (!_poRows.Any())
+{
+    <div class="card" style="padding:32px;text-align:center;color:var(--muted);">
+        No receiving discrepancies found — all received POs match ordered quantities.
+    </div>
+}
+else
+{
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px;">
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">POs with Discrepancies</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--warning);">@_poRows.Count</div>
+            <div style="font-size:0.75rem;color:var(--muted);">of @_totalPos received</div>
+        </div>
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Line Discrepancies</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--danger);">@_totalDiscrepancyLines</div>
+            <div style="font-size:0.75rem;color:var(--muted);">line items short-shipped</div>
+        </div>
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Ordered Value</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--fg);">$@_totalOrderedValue.ToString("N0")</div>
+            <div style="font-size:0.75rem;color:var(--muted);">across discrepant POs</div>
+        </div>
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Under-Received</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--danger);">$@(_totalOrderedValue - _totalReceivedValue).ToString("N0")</div>
+            <div style="font-size:0.75rem;color:var(--muted);">@((_totalOrderedValue > 0 ? (_totalOrderedValue - _totalReceivedValue) * 100m / _totalOrderedValue : 0).ToString("F1"))% variance</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;border:1px solid #0ea5e9;">
+        <div style="padding:14px 20px;border-bottom:1px solid #0ea5e9;font-weight:600;color:#0ea5e9;">
+            ✦ miAgentic — Receiving Discrepancy Intelligence
+        </div>
+        @if (_insightLoading)
+        {
+            <div style="padding:16px 20px;color:var(--muted);">Analyzing vendor fulfillment patterns…</div>
+        }
+        else if (_insight != null)
+        {
+            <div style="padding:16px 20px;white-space:pre-wrap;">@_insight.Insight</div>
+        }
+        <div style="padding:8px 20px;font-size:0.75rem;color:var(--muted);border-top:1px solid var(--border);">
+            Analysis based on aggregate PO counts and value variances — no individual contract terms disclosed.
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;padding:0;">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:600;">By Vendor</div>
+        <div style="overflow-x:auto;">
+            <table class="mip-table">
+                <thead>
+                    <tr>
+                        <th>Vendor</th>
+                        <th style="text-align:right;">POs</th>
+                        <th style="text-align:right;">Lines Short</th>
+                        <th style="text-align:right;">Ordered</th>
+                        <th style="text-align:right;">Received</th>
+                        <th style="text-align:right;">Variance</th>
+                        <th style="text-align:right;">Variance %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var v in _vendorRows.OrderByDescending(v => v.VarianceValue))
+                    {
+                        <tr>
+                            <td style="font-weight:600;">@v.VendorName</td>
+                            <td style="text-align:right;">@v.PoCount</td>
+                            <td style="text-align:right;color:var(--danger);">@v.DiscrepancyLines</td>
+                            <td style="text-align:right;">$@v.OrderedValue.ToString("N0")</td>
+                            <td style="text-align:right;">$@v.ReceivedValue.ToString("N0")</td>
+                            <td style="text-align:right;font-weight:600;color:var(--danger);">$@v.VarianceValue.ToString("N0")</td>
+                            <td style="text-align:right;@(v.VariancePct >= 20 ? "color:var(--danger);" : v.VariancePct >= 10 ? "color:var(--warning);" : "")">@v.VariancePct.ToString("F1")%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:600;">Purchase Order Detail</div>
+        <div style="overflow-x:auto;">
+            <table class="mip-table">
+                <thead>
+                    <tr>
+                        <th>PO #</th>
+                        <th>Vendor</th>
+                        <th>Campus</th>
+                        <th>Order Date</th>
+                        <th style="text-align:right;">Lines Short</th>
+                        <th style="text-align:right;">Ordered</th>
+                        <th style="text-align:right;">Received</th>
+                        <th style="text-align:right;">Variance</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _poRows.OrderByDescending(r => r.VarianceValue))
+                    {
+                        <tr>
+                            <td><a href="/purchase-orders/@r.PoId" style="color:var(--accent);">PO-@r.PoId.ToString("D4")</a></td>
+                            <td>@r.VendorName</td>
+                            <td>@r.CampusName</td>
+                            <td>@r.OrderDate.ToString("MMM d, yyyy")</td>
+                            <td style="text-align:right;color:var(--danger);">@r.DiscrepancyLineCount</td>
+                            <td style="text-align:right;">$@r.OrderedValue.ToString("N2")</td>
+                            <td style="text-align:right;">$@r.ReceivedValue.ToString("N2")</td>
+                            <td style="text-align:right;font-weight:600;color:var(--danger);">$@r.VarianceValue.ToString("N2")</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr style="font-weight:600;border-top:2px solid var(--border);">
+                        <td colspan="4">Total</td>
+                        <td style="text-align:right;color:var(--danger);">@_totalDiscrepancyLines</td>
+                        <td style="text-align:right;">$@_totalOrderedValue.ToString("N2")</td>
+                        <td style="text-align:right;">$@_totalReceivedValue.ToString("N2")</td>
+                        <td style="text-align:right;color:var(--danger);">$@(_totalOrderedValue - _totalReceivedValue).ToString("N2")</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private bool   _loading        = true;
+    private bool   _exporting      = false;
+    private bool   _insightLoading = false;
+    private int    _campusFilter   = 0;
+
+    private List<Campus>      _campuses    = [];
+    private List<PoRow>       _poRows      = [];
+    private List<VendorRow>   _vendorRows  = [];
+    private AgenticInsight?   _insight     = null;
+
+    private int     _totalPos              = 0;
+    private int     _totalDiscrepancyLines = 0;
+    private decimal _totalOrderedValue     = 0;
+    private decimal _totalReceivedValue    = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _campuses = await Db.Campuses.OrderBy(c => c.Name).ToListAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading  = true;
+        _insight  = null;
+        _poRows   = [];
+        _vendorRows = [];
+        StateHasChanged();
+
+        var allReceived = await Db.PurchaseOrders
+            .Where(po => po.Status == PurchaseOrderStatus.Received
+                      && (_campusFilter == 0 || po.CampusId == _campusFilter))
+            .Include(po => po.Lines)
+            .Include(po => po.Vendor)
+            .Include(po => po.Campus)
+            .OrderByDescending(po => po.OrderDate)
+            .ToListAsync();
+
+        _totalPos = allReceived.Count;
+
+        var discrepant = allReceived
+            .Where(po => po.Lines.Any(l => l.QuantityReceived < l.QuantityOrdered))
+            .ToList();
+
+        _poRows = discrepant.Select(po =>
+        {
+            var shortLines   = po.Lines.Where(l => l.QuantityReceived < l.QuantityOrdered).ToList();
+            decimal ordered  = shortLines.Sum(l => l.QuantityOrdered  * l.UnitCost);
+            decimal received = shortLines.Sum(l => l.QuantityReceived  * l.UnitCost);
+            return new PoRow(po.Id, po.Vendor?.Name ?? "—", po.Campus?.Name ?? "—",
+                             po.OrderDate, shortLines.Count, ordered, received);
+        }).ToList();
+
+        _vendorRows = _poRows
+            .GroupBy(r => r.VendorName)
+            .Select(g => new VendorRow(
+                g.Key, g.Count(),
+                g.Sum(r => r.DiscrepancyLineCount),
+                g.Sum(r => r.OrderedValue),
+                g.Sum(r => r.ReceivedValue)))
+            .ToList();
+
+        _totalDiscrepancyLines = _poRows.Sum(r => r.DiscrepancyLineCount);
+        _totalOrderedValue     = _poRows.Sum(r => r.OrderedValue);
+        _totalReceivedValue    = _poRows.Sum(r => r.ReceivedValue);
+
+        _loading = false;
+
+        if (_poRows.Any())
+            _ = LoadInsightAsync();
+    }
+
+    private async Task LoadInsightAsync()
+    {
+        _insightLoading = true;
+        StateHasChanged();
+
+        var topVendors = _vendorRows
+            .OrderByDescending(v => v.VarianceValue)
+            .Take(3)
+            .Select(v => $"{v.VendorName} (${v.VarianceValue:N0} short)")
+            .ToList();
+
+        _insight = await InsightSvc.GetReceivingDiscrepancyInsightAsync(
+            _totalPos, _poRows.Count,
+            _totalOrderedValue, _totalReceivedValue,
+            string.Join("; ", topVendors));
+
+        _insightLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("# miProcurement — Receiving Discrepancy Report");
+        sb.AppendLine($"# Campus: {(_campusFilter > 0 ? $"Campus {_campusFilter}" : "All Campuses")}");
+        sb.AppendLine($"# Generated: {DateTime.Now:yyyy-MM-dd HH:mm}");
+        sb.AppendLine($"# Received POs: {_totalPos} | With discrepancies: {_poRows.Count}");
+        sb.AppendLine("#");
+        sb.AppendLine("PO Number,Vendor,Campus,Order Date,Lines Short,Ordered Value,Received Value,Variance");
+        foreach (var r in _poRows.OrderByDescending(r => r.VarianceValue))
+            sb.AppendLine($"PO-{r.PoId:D4},{r.VendorName},{r.CampusName},{r.OrderDate:yyyy-MM-dd}," +
+                          $"{r.DiscrepancyLineCount},{r.OrderedValue:N2},{r.ReceivedValue:N2},{r.VarianceValue:N2}");
+        sb.AppendLine();
+        sb.AppendLine("Vendor Summary");
+        sb.AppendLine("Vendor,POs,Lines Short,Ordered,Received,Variance,Variance %");
+        foreach (var v in _vendorRows.OrderByDescending(v => v.VarianceValue))
+            sb.AppendLine($"{v.VendorName},{v.PoCount},{v.DiscrepancyLines}," +
+                          $"{v.OrderedValue:N2},{v.ReceivedValue:N2},{v.VarianceValue:N2},{v.VariancePct:F1}%");
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        await JS.InvokeVoidAsync("downloadFile",
+            $"ReceivingDiscrepancies_{DateTime.Now:yyyyMMdd}.csv",
+            "text/csv", Convert.ToBase64String(bytes));
+        _exporting = false;
+    }
+
+    private record PoRow(int PoId, string VendorName, string CampusName,
+        DateOnly OrderDate, int DiscrepancyLineCount, decimal OrderedValue, decimal ReceivedValue)
+    {
+        public decimal VarianceValue => OrderedValue - ReceivedValue;
+    }
+
+    private record VendorRow(string VendorName, int PoCount, int DiscrepancyLines,
+        decimal OrderedValue, decimal ReceivedValue)
+    {
+        public decimal VarianceValue => OrderedValue - ReceivedValue;
+        public decimal VariancePct   => OrderedValue > 0 ? VarianceValue * 100m / OrderedValue : 0m;
+    }
+}
