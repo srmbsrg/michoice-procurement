@@ -14,7 +14,7 @@
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
     <div>
         <div class="page-title">Vendor Spending</div>
-        <div class="page-sub">Purchase order spend by vendor — School Year @(_syStart.Year)–@(_syEnd.Year % 100:D2)</div>
+        <div class="page-sub">Purchase order spend by vendor — School Year @(_syStart.Year)–@((_syEnd.Year % 100).ToString("D2"))</div>
     </div>
     @if (_vendorRows.Any())
     {
@@ -108,7 +108,7 @@ else
                 <tbody>
                     @foreach (var v in _vendorRows)
                     {
-                        @{ var openStyle = v.OpenValue > 0 ? "text-align:right;color:var(--warning);" : "text-align:right;color:var(--muted);"; }
+                        var openStyle = v.OpenValue > 0 ? "text-align:right;color:var(--warning);" : "text-align:right;color:var(--muted);";
                         <tr>
                             <td style="font-weight:600;">@v.VendorName</td>
                             <td style="text-align:right;">@v.PoCount</td>
