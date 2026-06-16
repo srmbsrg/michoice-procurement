@@ -19,6 +19,11 @@ public interface IAgenticInsightService
     Task<AgenticInsight?> GetReceivingDiscrepancyInsightAsync(
         int totalPos, int discrepancyPos, decimal orderedValue, decimal receivedValue,
         string topDiscrepancies, CancellationToken ct = default);
+
+    /// <summary>Vendor spending insight — portfolio concentration, top vendor, spend distribution.</summary>
+    Task<AgenticInsight?> GetVendorSpendingInsightAsync(
+        int activeVendors, decimal totalSpend, string topVendor, decimal topVendorSpend,
+        decimal topVendorSharePct, CancellationToken ct = default);
 }
 
 public class StubAgenticInsightService : IAgenticInsightService
@@ -185,5 +190,31 @@ public class StubAgenticInsightService : IAgenticInsightService
 
         return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "ReceivingDiscrepancy", DateTimeOffset.UtcNow));
     }
-}
 
+    public Task<AgenticInsight?> GetVendorSpendingInsightAsync(
+        int activeVendors, decimal totalSpend, string topVendor, decimal topVendorSpend,
+        decimal topVendorSharePct, CancellationToken ct = default)
+    {
+        string insight;
+        if (totalSpend == 0)
+        {
+            insight = "No purchase order spend recorded for this school year. Create your first purchase order to begin tracking vendor relationships and build procurement history.";
+        }
+        else if (topVendorSharePct >= 80m)
+        {
+            insight = $"Concentration risk: {topVendor} represents {topVendorSharePct:F0}% of total spend (${topVendorSpend:N0} of ${totalSpend:N0}). " +
+                      "Qualify 1–2 secondary vendors to reduce single-source dependency and protect supply continuity.";
+        }
+        else if (topVendorSharePct >= 55m)
+        {
+            insight = $"Moderate concentration: {topVendor} is your primary supplier at {topVendorSharePct:F0}% of spend across {activeVendors} active vendor{(activeVendors == 1 ? "" : "s")}. " +
+                      "Healthy for an established relationship — review annually as part of vendor diversity planning per USDA procurement guidelines.";
+        }
+        else
+        {
+            insight = $"{activeVendors} active vendor{(activeVendors == 1 ? "" : "s")} with ${totalSpend:N0} in school-year spend. " +
+                      $"Portfolio concentration is well-distributed — no single vendor exceeds 55% of total procurement. Continue diversified sourcing.";
+        }
+        return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "VendorSpending", DateTimeOffset.UtcNow));
+    }
+}
