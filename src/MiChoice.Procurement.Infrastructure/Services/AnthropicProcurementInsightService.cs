@@ -190,6 +190,26 @@ public class AnthropicProcurementInsightService : IAgenticInsightService
         catch { return await _stub.GetReceivingDiscrepancyInsightAsync(totalPos, discrepancyPos, orderedValue, receivedValue, topDiscrepancies, ct); }
     }
 
+    public async Task<AgenticInsight?> GetVendorSpendingInsightAsync(
+        int activeVendors, decimal totalSpend, string topVendor, decimal topVendorSpend,
+        decimal topVendorSharePct, CancellationToken ct = default)
+    {
+        try
+        {
+            var prompt =
+                $"K-12 school district vendor spending analysis for NSLP procurement: " +
+                $"{activeVendors} active vendor{(activeVendors == 1 ? "" : "s")} this school year. " +
+                $"Total spend: ${totalSpend:N0}. " +
+                $"Top vendor: {topVendor} at ${topVendorSpend:N0} ({topVendorSharePct:F1}% of spend). " +
+                "Provide a 1-2 sentence assessment of vendor portfolio concentration risk and one action " +
+                "recommendation to support supply chain resilience for a K-12 food service director " +
+                "(consider USDA procurement regulations and NSLP continuity requirements).";
+            var text = await CallAsync(prompt, ct);
+            return new AgenticInsight(text, "VendorSpending", DateTimeOffset.UtcNow);
+        }
+        catch { return await _stub.GetVendorSpendingInsightAsync(activeVendors, totalSpend, topVendor, topVendorSpend, topVendorSharePct, ct); }
+    }
+
     // ── Anthropic API helper ──────────────────────────────────────────────────
 
     private async Task<string> CallAsync(string userPrompt, CancellationToken ct)
