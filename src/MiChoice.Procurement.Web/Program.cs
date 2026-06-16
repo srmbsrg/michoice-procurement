@@ -27,4 +27,5 @@ app.MapFallbackToPage("/_Host");
 
 await DatabaseSeeder.SeedAsync(app.Services);
 
+app.MapGet("/health", () => Results.Ok("Healthy"));
 app.Run();
