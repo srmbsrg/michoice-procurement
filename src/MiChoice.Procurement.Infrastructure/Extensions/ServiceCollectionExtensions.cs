@@ -35,7 +35,18 @@ public static class ServiceCollectionExtensions
         })
         .AddEntityFrameworkStores<ProcurementDbContext>();
 
-        services.AddScoped<IAgenticInsightService, StubAgenticInsightService>();
+        var anthropicKey = configuration["Anthropic:ApiKey"];
+        if (!string.IsNullOrWhiteSpace(anthropicKey))
+        {
+            services.AddHttpClient("anthropic");
+            services.AddScoped<IAgenticInsightService>(sp =>
+                new AnthropicProcurementInsightService(
+                    sp.GetRequiredService<IHttpClientFactory>(), anthropicKey));
+        }
+        else
+        {
+            services.AddScoped<IAgenticInsightService, StubAgenticInsightService>();
+        }
 
         return services;
     }
