@@ -1,0 +1,286 @@
+@page "/reports/vendor-spending"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using MiChoice.Procurement.Domain.Enums
+@using Microsoft.EntityFrameworkCore
+@using System.Text
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService InsightSvc
+@inject IJSRuntime JS
+
+<PageTitle>Vendor Spending — miProcurement</PageTitle>
+
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+    <div>
+        <div class="page-title">Vendor Spending</div>
+        <div class="page-sub">Purchase order spend by vendor — School Year @(_syStart.Year)–@(_syEnd.Year % 100:D2)</div>
+    </div>
+    @if (_vendorRows.Any())
+    {
+        <button class="btn btn-secondary" disabled="@_exporting" @onclick="ExportCsvAsync">
+            @(_exporting ? "Exporting…" : "Export CSV")
+        </button>
+    }
+</div>
+
+<div class="card" style="padding:14px 20px;margin-bottom:18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <label style="font-size:0.875rem;color:var(--muted);">Campus</label>
+    <select class="select-input" style="min-width:140px;" @bind="_campusFilter" @bind:after="LoadAsync">
+        <option value="0">All Campuses</option>
+        @foreach (var c in _campuses)
+        {
+            <option value="@c.Id">@c.Name</option>
+        }
+    </select>
+    <span style="font-size:0.8rem;color:var(--muted);">
+        @_totalPos total PO@(_totalPos == 1 ? "" : "s") — @_syStart.ToString("MMM d, yyyy") through @_syEnd.ToString("MMM d, yyyy")
+    </span>
+</div>
+
+@if (_loading)
+{
+    <div style="text-align:center;padding:40px 0;color:var(--muted);">Loading vendor spending report…</div>
+}
+else if (!_vendorRows.Any())
+{
+    <div class="card" style="padding:32px;text-align:center;color:var(--muted);">
+        No purchase orders found for this school year@(_campusFilter > 0 ? $" on the selected campus" : ""). Create your first PO to begin tracking vendor spend.
+    </div>
+}
+else
+{
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px;">
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Active Vendors</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--accent);">@_vendorRows.Count</div>
+            <div style="font-size:0.75rem;color:var(--muted);">with POs this year</div>
+        </div>
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Total Spend</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--fg);">$@_totalSpend.ToString("N0")</div>
+            <div style="font-size:0.75rem;color:var(--muted);">received value</div>
+        </div>
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Open Orders</div>
+            <div style="font-size:2rem;font-weight:700;color:var(--warning);">@_openPos</div>
+            <div style="font-size:0.75rem;color:var(--muted);">draft + submitted</div>
+        </div>
+        <div class="card" style="padding:18px;text-align:center;">
+            <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">Largest Vendor</div>
+            <div style="font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">@(_vendorRows.FirstOrDefault()?.VendorName ?? "—")</div>
+            <div style="font-size:0.75rem;color:var(--muted);">@(_topVendorSharePct.ToString("F0"))% of spend</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;border:1px solid #0ea5e9;">
+        <div style="padding:14px 20px;border-bottom:1px solid #0ea5e9;font-weight:600;color:#0ea5e9;">
+            ✦ miAgentic — Vendor Portfolio Intelligence
+        </div>
+        @if (_insightLoading)
+        {
+            <div style="padding:16px 20px;color:var(--muted);">Analyzing vendor spend distribution…</div>
+        }
+        else if (_insight != null)
+        {
+            <div style="padding:16px 20px;white-space:pre-wrap;">@_insight.Insight</div>
+        }
+        <div style="padding:8px 20px;font-size:0.75rem;color:var(--muted);border-top:1px solid var(--border);">
+            Analysis based on aggregate purchase order values — vendor contract terms are not disclosed.
+        </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:600;">Spend by Vendor</div>
+        <div style="overflow-x:auto;">
+            <table class="mip-table">
+                <thead>
+                    <tr>
+                        <th>Vendor</th>
+                        <th style="text-align:right;">POs</th>
+                        <th style="text-align:right;">Ordered</th>
+                        <th style="text-align:right;">Received</th>
+                        <th style="text-align:right;">Open Value</th>
+                        <th style="text-align:right;">Share %</th>
+                        <th style="min-width:120px;">Distribution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var v in _vendorRows)
+                    {
+                        @{ var openStyle = v.OpenValue > 0 ? "text-align:right;color:var(--warning);" : "text-align:right;color:var(--muted);"; }
+                        <tr>
+                            <td style="font-weight:600;">@v.VendorName</td>
+                            <td style="text-align:right;">@v.PoCount</td>
+                            <td style="text-align:right;">$@v.TotalOrdered.ToString("N0")</td>
+                            <td style="text-align:right;">$@v.TotalReceived.ToString("N0")</td>
+                            <td style="@openStyle">$@v.OpenValue.ToString("N0")</td>
+                            <td style="text-align:right;font-weight:600;">@v.SharePct.ToString("F1")%</td>
+                            <td>
+                                <div style="height:8px;background:var(--surface-2,#1e1e2e);border-radius:4px;overflow:hidden;">
+                                    <div style="height:100%;width:@(Math.Min(v.SharePct,100).ToString("F0"))%;background:#0ea5e9;border-radius:4px;"></div>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr style="font-weight:600;border-top:2px solid var(--border);">
+                        <td>Total</td>
+                        <td style="text-align:right;">@_totalPos</td>
+                        <td style="text-align:right;">$@_totalOrdered.ToString("N0")</td>
+                        <td style="text-align:right;">$@_totalSpend.ToString("N0")</td>
+                        <td style="@(_openValue > 0 ? "text-align:right;color:var(--warning);" : "text-align:right;")">$@_openValue.ToString("N0")</td>
+                        <td style="text-align:right;">100%</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private bool   _loading        = true;
+    private bool   _exporting      = false;
+    private bool   _insightLoading = false;
+    private int    _campusFilter   = 0;
+
+    private List<Campus>       _campuses   = [];
+    private List<VendorRow>    _vendorRows = [];
+    private AgenticInsight?    _insight    = null;
+
+    private DateOnly _syStart;
+    private DateOnly _syEnd;
+    private int      _totalPos       = 0;
+    private int      _openPos        = 0;
+    private decimal  _totalOrdered   = 0;
+    private decimal  _totalSpend     = 0;   // received value
+    private decimal  _openValue      = 0;
+    private decimal  _topVendorSharePct = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        int baseYear = today.Month >= 7 ? today.Year : today.Year - 1;
+        _syStart = new DateOnly(baseYear, 7, 1);
+        _syEnd   = new DateOnly(baseYear + 1, 6, 30);
+
+        _campuses = await Db.Campuses.OrderBy(c => c.Name).ToListAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading   = true;
+        _insight   = null;
+        _vendorRows = [];
+        StateHasChanged();
+
+        var pos = await Db.PurchaseOrders
+            .Where(po => po.OrderDate >= _syStart && po.OrderDate <= _syEnd
+                      && (_campusFilter == 0 || po.CampusId == _campusFilter))
+            .Include(po => po.Lines)
+            .Include(po => po.Vendor)
+            .ToListAsync();
+
+        _totalPos     = pos.Count;
+        _openPos      = pos.Count(po => po.Status == PurchaseOrderStatus.Draft || po.Status == PurchaseOrderStatus.Submitted);
+        _totalOrdered = pos.SelectMany(po => po.Lines).Sum(l => l.QuantityOrdered * l.UnitCost);
+        _totalSpend   = pos.Where(po => po.Status == PurchaseOrderStatus.Received)
+                           .SelectMany(po => po.Lines).Sum(l => l.QuantityReceived * l.UnitCost);
+        _openValue    = pos.Where(po => po.Status == PurchaseOrderStatus.Draft || po.Status == PurchaseOrderStatus.Submitted)
+                           .SelectMany(po => po.Lines).Sum(l => l.QuantityOrdered * l.UnitCost);
+
+        _vendorRows = pos
+            .GroupBy(po => po.Vendor?.Name ?? "Unknown")
+            .Select(g =>
+            {
+                var received = g.Where(po => po.Status == PurchaseOrderStatus.Received)
+                                .SelectMany(po => po.Lines).Sum(l => l.QuantityReceived * l.UnitCost);
+                var ordered  = g.SelectMany(po => po.Lines).Sum(l => l.QuantityOrdered * l.UnitCost);
+                var open     = g.Where(po => po.Status == PurchaseOrderStatus.Draft || po.Status == PurchaseOrderStatus.Submitted)
+                                .SelectMany(po => po.Lines).Sum(l => l.QuantityOrdered * l.UnitCost);
+                return new VendorRow(g.Key, g.Count(), ordered, received, open);
+            })
+            .OrderByDescending(v => v.TotalOrdered)
+            .ToList();
+
+        // Compute share pct against total ordered (all POs)
+        if (_totalOrdered > 0)
+        {
+            foreach (var v in _vendorRows)
+                v.SetShare(_totalOrdered);
+        }
+
+        _topVendorSharePct = _vendorRows.FirstOrDefault()?.SharePct ?? 0;
+
+        _loading = false;
+
+        if (_vendorRows.Any())
+            _ = LoadInsightAsync();
+    }
+
+    private async Task LoadInsightAsync()
+    {
+        _insightLoading = true;
+        StateHasChanged();
+
+        var top = _vendorRows.FirstOrDefault();
+        _insight = await InsightSvc.GetVendorSpendingInsightAsync(
+            _vendorRows.Count,
+            _totalSpend,
+            top?.VendorName ?? "—",
+            top?.TotalOrdered ?? 0,
+            top?.SharePct ?? 0);
+
+        _insightLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("# miProcurement — Vendor Spending Report");
+        sb.AppendLine($"# School Year: {_syStart.Year}–{_syEnd.Year % 100:D2}");
+        sb.AppendLine($"# Campus: {(_campusFilter > 0 ? $"Campus {_campusFilter}" : "All Campuses")}");
+        sb.AppendLine($"# Generated: {DateTime.Now:yyyy-MM-dd HH:mm}");
+        sb.AppendLine("#");
+        sb.AppendLine("Vendor,POs,Total Ordered,Total Received,Open Value,Share %");
+        foreach (var v in _vendorRows)
+            sb.AppendLine($"{v.VendorName},{v.PoCount},{v.TotalOrdered:N2},{v.TotalReceived:N2},{v.OpenValue:N2},{v.SharePct:F1}%");
+        sb.AppendLine();
+        sb.AppendLine($"District Total,{_totalPos},{_totalOrdered:N2},{_totalSpend:N2},{_openValue:N2},100%");
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        await JS.InvokeVoidAsync("downloadFile",
+            $"VendorSpending_SY{_syStart.Year}-{_syEnd.Year % 100:D2}_{DateTime.Now:yyyyMMdd}.csv",
+            "text/csv", Convert.ToBase64String(bytes));
+        _exporting = false;
+    }
+
+    private class VendorRow
+    {
+        public string  VendorName    { get; }
+        public int     PoCount       { get; }
+        public decimal TotalOrdered  { get; }
+        public decimal TotalReceived { get; }
+        public decimal OpenValue     { get; }
+        public decimal SharePct      { get; private set; }
+
+        public VendorRow(string name, int poCount, decimal ordered, decimal received, decimal open)
+        {
+            VendorName    = name;
+            PoCount       = poCount;
+            TotalOrdered  = ordered;
+            TotalReceived = received;
+            OpenValue     = open;
+        }
+
+        public void SetShare(decimal districtTotal)
+            => SharePct = districtTotal > 0 ? TotalOrdered * 100m / districtTotal : 0m;
+    }
+}
