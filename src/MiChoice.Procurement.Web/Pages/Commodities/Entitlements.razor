@@ -169,18 +169,16 @@ else
                                         {
                                             var orderTotal   = order.QuantityOrdered * order.UnitCost;
                                             var isCancelled  = order.Status == EntitlementOrderStatus.Cancelled;
-                                            @{
-                                                var (sbg, slabel) = order.Status switch
-                                                {
-                                                    EntitlementOrderStatus.Pending   => ("#6b7280", "Pending"),
-                                                    EntitlementOrderStatus.Ordered   => ("#2563eb", "Ordered"),
-                                                    EntitlementOrderStatus.Received  => ("#16a34a", "Received"),
-                                                    EntitlementOrderStatus.Cancelled => ("#d1d5db", "Cancelled"),
-                                                    _                                => ("#6b7280", order.Status.ToString())
-                                                };
-                                            }
+                                            var (sbg, slabel) = order.Status switch
+                                            {
+                                                EntitlementOrderStatus.Pending   => ("#6b7280", "Pending"),
+                                                EntitlementOrderStatus.Ordered   => ("#2563eb", "Ordered"),
+                                                EntitlementOrderStatus.Received  => ("#16a34a", "Received"),
+                                                EntitlementOrderStatus.Cancelled => ("#d1d5db", "Cancelled"),
+                                                _                                => ("#6b7280", order.Status.ToString())
+                                            };
                                             <tr style="@(isCancelled ? "opacity:0.55;" : "")">
-                                                <td style="padding-left:28px">@(order.CommodityItem?.Name ?? "—")</td>
+                                                <td style="padding-left:28px">@(order.CommodityItem?.Description ?? "—")</td>
                                                 <td style="text-align:right">@order.QuantityOrdered.ToString("N2")</td>
                                                 <td style="text-align:right">@order.UnitCost.ToString("C2")</td>
                                                 <td style="text-align:right;font-weight:500">@orderTotal.ToString("C2")</td>
