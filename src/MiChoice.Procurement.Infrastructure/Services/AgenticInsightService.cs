@@ -11,6 +11,9 @@ public interface IAgenticInsightService
     Task<AgenticInsight?> GetTransferInsightAsync(CancellationToken ct = default);
     Task<AgenticInsight?> GetVendorInsightAsync(int total, int active, int usdaCount, CancellationToken ct = default);
     Task<AgenticInsight?> GetPurchaseOrderInsightAsync(int total, int draft, int submitted, int received, decimal totalValue, CancellationToken ct = default);
+        Task<AgenticInsight?> GetLowStockInsightAsync(
+        int lowStockItems, int outOfStock, int campusCount, int totalItems,
+        string topUrgent, CancellationToken ct = default);
 }
 
 public class StubAgenticInsightService : IAgenticInsightService
@@ -109,4 +112,38 @@ public class StubAgenticInsightService : IAgenticInsightService
         }
         return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "PurchaseOrder", DateTimeOffset.UtcNow));
     }
+
+    public Task<AgenticInsight?> GetLowStockInsightAsync(
+        int lowStockItems, int outOfStock, int campusCount, int totalItems,
+        string topUrgent, CancellationToken ct = default)
+    {
+        string insight;
+
+        if (lowStockItems == 0)
+        {
+            insight = $"All {totalItems} inventory items are above their reorder thresholds. No action required at this time.";
+        }
+        else if (outOfStock > 0)
+        {
+            insight = $"{outOfStock} item{(outOfStock == 1 ? "" : "s")} completely out of stock " +
+                      $"across {campusCount} campus{(campusCount == 1 ? "" : "es")}. " +
+                      (string.IsNullOrWhiteSpace(topUrgent) ? "" : $"Highest priority: {topUrgent}. ") +
+                      "Create purchase orders immediately to restore supply and prevent service interruption.";
+        }
+        else if (lowStockItems > 3)
+        {
+            insight = $"{lowStockItems} items approaching reorder thresholds across {campusCount} campus{(campusCount == 1 ? "" : "es")}. " +
+                      (string.IsNullOrWhiteSpace(topUrgent) ? "" : $"Most urgent: {topUrgent}. ") +
+                      "Consolidate into a single vendor order to qualify for volume pricing and reduce shipping costs.";
+        }
+        else
+        {
+            insight = $"{lowStockItems} item{(lowStockItems == 1 ? "" : "s")} at or below the reorder point. " +
+                      (string.IsNullOrWhiteSpace(topUrgent) ? "" : $"Top items: {topUrgent}. ") +
+                      "Review with the ordering manager before the next scheduled delivery window.";
+        }
+
+        return Task.FromResult<AgenticInsight?>(new AgenticInsight(insight, "LowStock", DateTimeOffset.UtcNow));
+    }
 }
+

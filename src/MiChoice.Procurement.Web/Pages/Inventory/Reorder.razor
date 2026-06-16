@@ -1,0 +1,214 @@
+@page "/inventory/reorder"
+@using MiChoice.Procurement.Infrastructure.Data
+@using MiChoice.Procurement.Infrastructure.Services
+@using MiChoice.Procurement.Domain.Entities
+@using Microsoft.EntityFrameworkCore
+@inject ProcurementDbContext Db
+@inject IAgenticInsightService AgenticSvc
+@rendermode InteractiveServer
+
+<PageTitle>Low Stock Report — miProcurement</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="page-title">Low Stock Report</div>
+        <div class="page-sub">Items at or below reorder threshold — action required</div>
+    </div>
+    <div>
+        <button class="btn btn-primary" @onclick="LoadAsync" disabled="@_loading">
+            @(_loading ? "Loading…" : "↻ Refresh")
+        </button>
+    </div>
+</div>
+
+@* miAgentic panel *@
+@if (_insightLoading || _insight is not null)
+{
+    <div class="agentic-panel" style="margin-bottom:24px">
+        <div class="ap-label">⚡ miAgentic — Low Stock Intelligence</div>
+        @if (_insightLoading)
+        {
+            <div class="ap-insight" style="color:#94a3b8;font-style:italic">Analyzing inventory levels…</div>
+        }
+        else
+        {
+            <div class="ap-insight">@_insight?.Insight</div>
+        }
+    </div>
+}
+
+@* KPI cards *@
+<div class="kpi-row" style="margin-bottom:20px">
+    <div class="kpi-card">
+        <div class="kpi-value" style="color:#ef4444">@_outOfStock</div>
+        <div class="kpi-label">Out of Stock</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" style="color:#f59e0b">@_critical</div>
+        <div class="kpi-label">Critical (&lt;50% of Reorder)</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" style="color:#38bdf8">@_lowStock.Count</div>
+        <div class="kpi-label">Total Low-Stock Items</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">@_campusCount</div>
+        <div class="kpi-label">Campuses Affected</div>
+    </div>
+</div>
+
+@* Campus filter *@
+<div class="filters-bar" style="margin-bottom:16px">
+    <select class="form-control" style="width:220px" @onchange="OnCampusChange">
+        <option value="0">All Campuses</option>
+        @foreach (var c in _campuses)
+        {
+            <option value="@c.Id">@c.Name</option>
+        }
+    </select>
+    <a href="/purchase-orders/new" class="btn btn-secondary" style="margin-left:auto">
+        + Create Purchase Order
+    </a>
+</div>
+
+@if (_loading && !_lowStock.Any())
+{
+    <div class="loading-placeholder" style="padding:2rem;text-align:center;color:#94a3b8">Loading inventory…</div>
+}
+else if (!_lowStock.Any())
+{
+    <div class="card" style="padding:2rem;text-align:center;color:#22c55e;font-size:1rem">
+        ✓ All inventory items are above reorder thresholds. No action required.
+    </div>
+}
+else
+{
+    <div class="card" style="padding:0">
+        <table class="mip-table">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Category</th>
+                    <th>Campus</th>
+                    <th>UoM</th>
+                    <th>Current</th>
+                    <th>Reorder Pt</th>
+                    <th>Gap</th>
+                    <th>Urgency</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _lowStock)
+                {
+                    var gap      = s.InventoryItem.ReorderPoint - s.CurrentStock;
+                    var urgency  = s.CurrentStock == 0     ? "Out of Stock" :
+                                   s.CurrentStock < s.InventoryItem.ReorderPoint * 0.5m ? "Critical" : "Low";
+                    var urgColor = urgency == "Out of Stock" ? "#ef4444" :
+                                   urgency == "Critical"     ? "#f59e0b" : "#eab308";
+                    var rowBg    = urgency == "Out of Stock" ? "#1a0000" :
+                                   urgency == "Critical"     ? "#1a1000" : "#111100";
+                    <tr style="background:@rowBg">
+                        <td style="font-weight:500">@s.InventoryItem.Name</td>
+                        <td>@(s.InventoryItem.Category ?? "—")</td>
+                        <td>@s.Campus.Name</td>
+                        <td>@s.InventoryItem.UnitOfMeasure</td>
+                        <td style="font-weight:600">@s.CurrentStock.ToString("N2")</td>
+                        <td>@s.InventoryItem.ReorderPoint.ToString("N2")</td>
+                        <td style="color:@urgColor;font-weight:600">
+                            @(gap > 0 ? $"+{gap:N2}" : "0")
+                        </td>
+                        <td>
+                            <span class="badge"
+                                  style="background:@urgColor20;color:@urgColor;border:1px solid @urgColor">
+                                @urgency
+                            </span>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private List<InventoryStock> _lowStock  = [];
+    private List<Campus>         _campuses  = [];
+    private AgenticInsight?      _insight;
+    private bool                 _loading;
+    private bool                 _insightLoading;
+    private int                  _selectedCampusId;
+    private int                  _outOfStock;
+    private int                  _critical;
+    private int                  _campusCount;
+
+    protected override async Task OnInitializedAsync()
+        => await LoadAsync();
+
+    private void OnCampusChange(ChangeEventArgs e)
+    {
+        _selectedCampusId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        _ = LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading       = true;
+        _insight       = null;
+        _insightLoading = false;
+        StateHasChanged();
+
+        _campuses = await Db.Campuses.Where(c => c.IsActive).OrderBy(c => c.Name).ToListAsync();
+
+        var q = Db.InventoryStocks
+            .Include(s => s.InventoryItem)
+            .Include(s => s.Campus)
+            .Where(s => s.InventoryItem.IsActive &&
+                        s.CurrentStock <= s.InventoryItem.ReorderPoint);
+
+        if (_selectedCampusId > 0)
+            q = q.Where(s => s.CampusId == _selectedCampusId);
+
+        _lowStock = await q
+            .OrderBy(s => s.CurrentStock == 0 ? 0 : s.CurrentStock <= s.InventoryItem.ReorderPoint * 0.5m ? 1 : 2)
+            .ThenBy(s => s.CurrentStock / (s.InventoryItem.ReorderPoint == 0 ? 1 : s.InventoryItem.ReorderPoint))
+            .ThenBy(s => s.InventoryItem.Name)
+            .ToListAsync();
+
+        _outOfStock  = _lowStock.Count(s => s.CurrentStock == 0);
+        _critical    = _lowStock.Count(s => s.CurrentStock > 0 && s.CurrentStock < s.InventoryItem.ReorderPoint * 0.5m);
+        _campusCount = _lowStock.Select(s => s.CampusId).Distinct().Count();
+
+        _loading = false;
+        StateHasChanged();
+
+        _ = LoadInsightAsync();
+    }
+
+    private async Task LoadInsightAsync()
+    {
+        _insightLoading = true;
+        try
+        {
+            // Build a compact list of top-urgent items for context (max 3)
+            var topUrgent = string.Join(", ",
+                _lowStock.Take(3).Select(s =>
+                    $"{s.InventoryItem.Name} ({s.Campus.Name}, {s.CurrentStock:N0}/{s.InventoryItem.ReorderPoint:N0} {s.InventoryItem.UnitOfMeasure})"));
+
+            var totalItems = await Db.InventoryItems.CountAsync(i => i.IsActive);
+
+            _insight = await AgenticSvc.GetLowStockInsightAsync(
+                _lowStock.Count, _outOfStock, _campusCount, totalItems, topUrgent);
+        }
+        catch
+        {
+            _insight = new AgenticInsight(
+                "miAgentic insight unavailable — configure Anthropic:ApiKey on Railway to enable live inference.",
+                "LowStock", DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            _insightLoading = false;
+            StateHasChanged();
+        }
+    }
+}
