@@ -1,0 +1,29 @@
+## .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+.vs/
+
+## Rider / JetBrains
+.idea/
+
+## Local databases / secrets
+*.db
+*.db-shm
+*.db-wal
+appsettings.Development.json
+*.env
+
+## Publish artifacts
+publish/
+*.nupkg
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Linux editor temp files
+.fuse_hidden*
