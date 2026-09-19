@@ -27,6 +27,9 @@ public class ProcurementDbContext : IdentityDbContext<ProcurementUser>
     {
         base.OnModelCreating(builder);
 
+        // One shared district DB: procurement owns the "proc" schema (2026-09-19).
+        builder.HasDefaultSchema("proc");
+
         builder.Entity<Entitlement>()
             .Ignore(e => e.UsedDollars)
             .Ignore(e => e.RemainingDollars);

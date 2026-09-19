@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using MiChoice.Procurement.Infrastructure.Data;
 using MiChoice.Procurement.Infrastructure.Extensions;
 
@@ -25,6 +26,15 @@ app.MapRazorPages();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<MiChoice.Procurement.Infrastructure.Data.ProcurementDbContext>();
+    // One shared district DB: migrate on SQL Server (proc schema); EnsureCreated for local SQLite dev.
+    if ((app.Configuration["DatabaseProvider"] ?? "sqlite").Equals("sqlserver", StringComparison.OrdinalIgnoreCase))
+        await db.Database.MigrateAsync();
+    else
+        await db.Database.EnsureCreatedAsync();
+}
 await DatabaseSeeder.SeedAsync(app.Services);
 
 app.MapGet("/health", () => Results.Ok("Healthy"));

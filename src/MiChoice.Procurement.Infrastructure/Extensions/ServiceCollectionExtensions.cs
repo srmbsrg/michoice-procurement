@@ -18,7 +18,9 @@ public static class ServiceCollectionExtensions
         if (provider.Equals("sqlserver", StringComparison.OrdinalIgnoreCase))
         {
             services.AddDbContext<ProcurementDbContext>(opts =>
-                opts.UseSqlServer(configuration.GetConnectionString("DefaultConnection")));
+                opts.UseSqlServer(configuration.GetConnectionString("DefaultConnection"),
+                        sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", "proc"))
+                    .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
         }
         else
         {
