@@ -35,13 +35,19 @@ public static class ServiceCollectionExtensions
         })
         .AddEntityFrameworkStores<ProcurementDbContext>();
 
+        // Local-first: live service when Anthropic:ApiKey or a model-server Anthropic:BaseUrl
+        // (default: local Ollama) is configured, stub otherwise. The live service falls back
+        // to the stub on any call failure (e.g. Ollama not installed).
         var anthropicKey = configuration["Anthropic:ApiKey"];
-        if (!string.IsNullOrWhiteSpace(anthropicKey))
+        var anthropicBaseUrl = configuration["Anthropic:BaseUrl"];
+        var anthropicModel = configuration["Anthropic:Model"];
+        if (AnthropicProcurementInsightService.IsConfigured(anthropicKey, anthropicBaseUrl))
         {
             services.AddHttpClient("anthropic");
             services.AddScoped<IAgenticInsightService>(sp =>
                 new AnthropicProcurementInsightService(
-                    sp.GetRequiredService<IHttpClientFactory>(), anthropicKey));
+                    sp.GetRequiredService<IHttpClientFactory>(), anthropicKey,
+                    anthropicBaseUrl, anthropicModel));
         }
         else
         {

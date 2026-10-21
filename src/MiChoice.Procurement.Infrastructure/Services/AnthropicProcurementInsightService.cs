@@ -5,8 +5,11 @@ using System.Text.Json;
 namespace MiChoice.Procurement.Infrastructure.Services;
 
 /// <summary>
-/// Live miAgentic insight service for miProcurement — calls Claude Haiku via Anthropic Messages API.
-/// Auto-activates when Anthropic:ApiKey is present in Railway / appsettings.
+/// Live miAgentic insight service for miProcurement over the Anthropic Messages API, local-first:
+/// by default it calls a free local model (Ollama at Anthropic:BaseUrl, model Anthropic:Model);
+/// it calls Anthropic (claude-haiku-4-5-20251001 unless Anthropic:Model names another Claude model)
+/// when Anthropic:ApiKey is set or Anthropic:BaseUrl points at api.anthropic.com.
+/// Auto-activates when Anthropic:ApiKey or Anthropic:BaseUrl is configured.
 /// Falls back to <see cref="StubAgenticInsightService"/> on any API failure.
 /// </summary>
 public class AnthropicProcurementInsightService : IAgenticInsightService
@@ -14,8 +17,8 @@ public class AnthropicProcurementInsightService : IAgenticInsightService
     private readonly HttpClient _http;
     private readonly string     _apiKey;
     private readonly StubAgenticInsightService _stub = new();
-    private const string Model  = "claude-haiku-4-5-20251001";
-    private const string ApiUrl = "https://api.anthropic.com/v1/messages";
+    private readonly string     _model;
+    private readonly string     _apiUrl;
 
     private const string SystemPrompt =
         "You are miAgentic, an AI assistant for K-12 school district food service procurement. " +
@@ -23,11 +26,62 @@ public class AnthropicProcurementInsightService : IAgenticInsightService
         "Focus on USDA NSLP program compliance, cost efficiency, and supply chain continuity. " +
         "Be direct and specific. Avoid filler language.";
 
-    public AnthropicProcurementInsightService(IHttpClientFactory httpClientFactory, string apiKey)
+    /// <param name="apiKey">Anthropic API key; may be empty for a local model server.</param>
+    /// <param name="baseUrl">Anthropic:BaseUrl (e.g. http://localhost:11434); null/empty = api.anthropic.com.</param>
+    /// <param name="model">Anthropic:Model; null/empty = <see cref="DefaultAnthropicModel"/>.</param>
+    public AnthropicProcurementInsightService(IHttpClientFactory httpClientFactory, string? apiKey,
+        string? baseUrl = null, string? model = null)
     {
         _http   = httpClientFactory.CreateClient("anthropic");
-        _apiKey = apiKey;
+        _apiKey = apiKey ?? string.Empty;
+        var (resolvedBaseUrl, resolvedModel) = ResolveEndpoint(apiKey, baseUrl, model);
+        _model  = resolvedModel;
+        _apiUrl = $"{resolvedBaseUrl}/v1/messages";
     }
+    // ── Local-first endpoint resolution ───────────────────────────────────────
+    // Config: Anthropic:BaseUrl, Anthropic:Model, Anthropic:ApiKey. The shipped
+    // appsettings point at a local Ollama server (free, on the district's own box),
+    // which serves the same Anthropic Messages API at {BaseUrl}/v1/messages.
+    // A deployment that sets Anthropic:ApiKey and leaves BaseUrl empty or at a
+    // loopback default keeps calling api.anthropic.com with a Claude model,
+    // exactly as before.
+
+    /// <summary>Public Anthropic API base URL (used when no other endpoint applies).</summary>
+    public const string AnthropicCloudBaseUrl = "https://api.anthropic.com";
+
+    /// <summary>Model used against Anthropic when Anthropic:Model is not a Claude model.</summary>
+    public const string DefaultAnthropicModel = "claude-haiku-4-5-20251001";
+
+    /// <summary>
+    /// Resolves the Messages API base URL (no trailing slash) and model name.
+    /// </summary>
+    public static (string BaseUrl, string Model) ResolveEndpoint(
+        string? apiKey, string? baseUrl, string? model)
+    {
+        var url = string.IsNullOrWhiteSpace(baseUrl)
+            ? AnthropicCloudBaseUrl
+            : baseUrl.Trim().TrimEnd('/');
+
+        // Malformed URL => cloud default (only reachable with a key: IsConfigured is false
+        // without one, so nothing is sent anywhere). Keyed deployment + loopback default
+        // URL => real Anthropic (unchanged behaviour for keyed deployments).
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (!string.IsNullOrWhiteSpace(apiKey) && uri.IsLoopback))
+            url = AnthropicCloudBaseUrl;
+
+        var isAnthropicCloud = url.Contains("api.anthropic.com", StringComparison.OrdinalIgnoreCase);
+        var resolvedModel = string.IsNullOrWhiteSpace(model)
+                            || (isAnthropicCloud && !model.Trim().StartsWith("claude", StringComparison.OrdinalIgnoreCase))
+            ? DefaultAnthropicModel
+            : model.Trim();
+
+        return (url, resolvedModel);
+    }
+
+    /// <summary>True when the real (non-stub) insight service should be registered.</summary>
+    public static bool IsConfigured(string? apiKey, string? baseUrl)
+        => !string.IsNullOrWhiteSpace(apiKey)
+           || Uri.TryCreate(baseUrl?.Trim(), UriKind.Absolute, out _);
 
     // ── Interface implementation ──────────────────────────────────────────────
 
@@ -216,14 +270,14 @@ public class AnthropicProcurementInsightService : IAgenticInsightService
     {
         var payload = new
         {
-            model      = Model,
+            model      = _model,
             max_tokens = 200,
             system     = SystemPrompt,
             messages   = new[] { new { role = "user", content = userPrompt } }
         };
 
         var body = JsonSerializer.Serialize(payload);
-        using var request = new HttpRequestMessage(HttpMethod.Post, ApiUrl);
+        using var request = new HttpRequestMessage(HttpMethod.Post, _apiUrl);
         request.Headers.Add("x-api-key", _apiKey);
         request.Headers.Add("anthropic-version", "2023-06-01");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
